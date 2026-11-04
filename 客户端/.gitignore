@@ -1,0 +1,23 @@
+# Gradle
+.gradle/
+build/
+
+# 本地配置（含 SDK 路径和高德 key，不提交）
+local.properties
+
+# IDE
+.idea/
+.kotlin/
+*.iml
+
+# 构建产物
+*.apk
+*.aab
+/captures
+
+# 系统 / 编辑器
+.DS_Store
+*.swp
+*.log
+.externalNativeBuild
+.cxx
