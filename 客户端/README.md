@@ -1,7 +1,7 @@
 # 智慧校园系统 —— Android 客户端
 
 > 《基于地理围栏与即时通讯的智慧校园系统》的 Android 客户端，使用 **Jetpack Compose** 构建。
-> 后端为 C++（epoll 长连接 + AOI 九宫格索引）+ Lua（热更新业务规则）+ MySQL/Redis，本仓库只包含客户端。
+> 后端为 C++（boost/asio 长连接 + 自定义二进制协议 + AOI 九宫格索引）+ Lua（热更新业务规则）+ MySQL/Redis，本仓库只包含客户端。
 
 ## 目录结构
 
