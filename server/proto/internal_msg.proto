@@ -1,0 +1,17 @@
+// 内部通信协议定义 (Gateway <-> Logic)
+// M0 阶段仅占位, 待 M1 引入 protobuf + gRPC 时实现。
+//
+// 设计思路 (见设计方案):
+//   - Gateway (C++) 负责接入 + AOI 空间索引, 业务规则在 Logic (Lua)
+//   - 二者之间通过 gRPC 转发业务消息, 实现"网络 I/O 与业务解耦"
+//   - Gateway 掉线不影响 Logic, 反之亦然, 防雪崩
+
+syntax = "proto3";
+
+package smartcampus.internal;
+
+// 示例: 业务消息转发信封 (后续补充)
+message InternalEnvelope {
+  string route = 1;   // 路由到哪个 Logic 节点
+  bytes  payload = 2; // 客户端原始二进制包体
+}

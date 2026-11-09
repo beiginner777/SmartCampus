@@ -1,0 +1,49 @@
+# ================= 构建产物 / 中间产物 =================
+build/
+cmake-build-*/
+out/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.exp
+
+# ================= CMake =================
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+build.ninja
+.ninja_deps
+.ninja_log
+compile_commands.json
+Testing/
+CMakeUserPresets.json
+
+# ================= FetchContent 下载的第三方源码 =================
+third-party/_fetchcontent/
+third-party/_deps/
+third-party/_build/
+
+# ================= 运行时产物 =================
+logs/
+*.log
+
+# ================= IDE / 编辑器 =================
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln.user
+.DS_Store
+Thumbs.db
