@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+// 网关控制面 gRPC 接口：AuthServer 登录后据此踢掉 uid 的旧连接（异地登录互踢）
+package gatewayrpc;
+
+service GatewayControl {
+  rpc KickUser(KickUserRequest) returns (KickUserResponse);
+}
+
+message KickUserRequest {
+  uint32 uid = 1;     // 被踢用户的 uid
+  string reason = 2;  // 踢人原因（如"已在别处登录"）
+}
+
+message KickUserResponse {
+  int32 code = 1;  // 0=成功，非 0=失败（如未找到连接）
+}

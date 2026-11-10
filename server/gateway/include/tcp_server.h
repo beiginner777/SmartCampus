@@ -1,16 +1,17 @@
 #pragma once
 
+#include "session.h"
+
 #include <boost/asio.hpp>
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace gateway {
 
-// 最小 TCP 服务器 (M0: EchoServer)
-//   - 接受连接 / 收发数据 / 断线回调
-//   - 基于 boost::asio 封装的异步IO
+// TCP 接入服务器：接受连接，为每个连接创建 Session（基于 boost::asio 异步 IO）
 class TcpServer {
 public:
     struct Options {
@@ -18,11 +19,12 @@ public:
         uint16_t port = 9000;
     };
 
-    // 回调：连接建立 / 收到数据 / 连接断开 (均在 io_context 线程内触发)
-    std::function<void(const std::string& remote_endpoint)> on_connected;
-    std::function<void(const std::string& remote_endpoint, const std::string& data)> on_received;
-    std::function<void(const std::string& remote_endpoint, const std::string& reason)>
-        on_disconnected;
+    using SessionPtr = std::shared_ptr<Session>;
+
+    // 回调：连接建立 / 收到完整包 / 连接断开
+    std::function<void(const SessionPtr&)> on_connected;
+    std::function<void(const SessionPtr&, const common::Packet&)> on_packet;
+    std::function<void(const SessionPtr&, const std::string&)> on_disconnected;
 
     TcpServer(boost::asio::io_context& io, Options opt);
     ~TcpServer();
@@ -35,7 +37,7 @@ private:
 
     boost::asio::io_context& io_;
     Options opt_;
-    boost::asio::ip::tcp::acceptor acceptor_;
+    tcp::acceptor acceptor_;
 };
 
 }  // namespace gateway

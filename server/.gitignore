@@ -35,6 +35,9 @@ third-party/_fetchcontent/
 third-party/_deps/
 third-party/_build/
 
+# ================= 生成的 libpq 导入库 =================
+third-party/libpq/
+
 # ================= 运行时产物 =================
 logs/
 *.log

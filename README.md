@@ -372,3 +372,58 @@ sequenceDiagram
 4. **弹性伸缩**：基于物理资源水位的动态自适应降频机制，保障高并发下的系统可用性。
     
 5. **动静分离**：彻底剥离大文件传输，采用云存储直传与 CDN 加速，让核心网关专注高并发信令。
+
+## 六、 通信协议定义（M1 阶段）
+
+服务端对外分两层通信：**HTTP（AuthServer，鉴权）** 与 **TCP 二进制协议（Gateway，长连接）**。
+
+### 1. HTTP API（AuthServer，beast，默认 8080）
+
+统一约定：`POST` + JSON body；HTTP 状态码 200；业务结果用 `code` 字段（0=成功，非 0 见错误码）。
+
+| 接口 | 请求字段 | 成功响应 |
+|------|---------|---------|
+| `POST /register` | `username`(必填) `password`(必填) `role` `nickname` `tags` | `{"code":0}` |
+| `POST /login` | `username` `password` | `{"code":0,"token","uid","username","nickname","role","tags"}` |
+| `POST /refresh` | `token` | `{"code":0,"token"}` |
+
+登录成功后 AuthServer 签发 JWT（HS256，payload `{uid, username, exp}`），写 Redis `session:{uid}`=token；若该 uid 已有在线连接，则按路由表 `conn:{uid}` 找到其网关，通过 **gRPC `KickUser`** 精准踢掉旧连接（异地登录互踢）。
+
+### 2. TCP 二进制协议（Gateway，asio，默认 9000）
+
+帧格式（大端）：`length(4) + msg_type(2) + seq(4) + body(JSON)`。seq 用于请求/响应匹配。
+
+| msg_type | 值 | 方向 | body 字段 |
+|---------|-----|------|----------|
+| AUTH_REQ | 0x0006 | C→S | `{"token"}` |
+| HEARTBEAT_REQ | 0x0003 | C→S | `{}` |
+| LOGOUT_REQ | 0x0004 | C→S | `{}` |
+| AUTH_RESP | 0x8006 | S→C | `{"code","uid","username"}` |
+| HEARTBEAT_RESP | 0x8003 | S→C | `{"code"}` |
+| LOGOUT_RESP | 0x8004 | S→C | `{"code"}` |
+| KICK_NOTIFY | 0x8005 | S→C | `{"reason":"已在别处登录"/"心跳超时"}` |
+| ERROR | 0x8000 | S→C | `{"code","msg"}` |
+
+鉴权流程：客户端 `POST /login` 拿 token → TCP 连网关 → 首包发 `AUTH_REQ{token}` → 网关验 JWT 签名 + 比对 Redis `session:{uid}`（token 新鲜度校验，堵「B 登录早于 A 建连」的竞态漏踢）→ 建立鉴权连接 → 周期心跳。异地登录互踢：AuthServer 登录时查路由表 `conn:{uid}` → gRPC `KickUser` 精准踢掉该 uid 的旧连接。
+
+### 3. 网关控制面 gRPC（Gateway，默认 9001）
+
+服务端内部（AuthServer ↔ Gateway）用 gRPC 协调异地互踢：
+
+| RPC | 请求 | 响应 |
+|-----|------|------|
+| `GatewayControl.KickUser` | `{uid, reason}` | `{code}` |
+
+路由表：网关在连接鉴权成功后写 Redis `conn:{uid}`=本网关 gRPC 地址（`host:port`，TTL=心跳超时）；AuthServer 登录时读它并 gRPC 调 KickUser。这样多网关下也能精准定位到「持有该连接的网关」踢人，而不是广播。
+
+### 错误码
+
+| code | 含义 |
+|------|------|
+| 0 | 成功 |
+| 1 | 参数错误 |
+| 2 | 用户名已存在 |
+| 3 | 用户名或密码错误 |
+| 4 | 未登录 |
+| 5 | 数据库错误 |
+| 6 | 无效 token / 未知消息类型 |

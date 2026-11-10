@@ -2,6 +2,36 @@
   "host": "0.0.0.0",
   "port": 9000,
   "thread_count": 4,
-  "log_level": "info",
-  "log_file": "logs/server.log"
+  "log_level": "debug",
+  "log_file": "logs/server.log",
+  "jwt": {
+    "secret": "change-me",
+    "expire_seconds": 7200
+  },
+  "heartbeat": {
+    "interval_seconds": 30,
+    "timeout_seconds": 90
+  },
+  "postgres": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "postgres",
+    "password": "123456",
+    "database": "smart_campus",
+    "pool_size": 8
+  },
+  "redis": {
+    "host": "127.0.0.1",
+    "port": 6380,
+    "password": "123456",
+    "pool_size": 8
+  },
+  "auth": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "gateway_grpc": {
+    "host": "127.0.0.1",
+    "port": 9001
+  }
 }

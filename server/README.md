@@ -4,54 +4,92 @@
 
 > 详见 `../README.md`（设计方案）
 
+当前进度：**M0（EchoServer）+ M1（通信底座 + 鉴权）+ gRPC 控制面（异地互踢）已完成**。
+
 ## 目录结构
 
 ```
 server/
 ├── CMakeLists.txt      # 顶层 CMake，统一管理编译
-├── config/server.json  # 运行时配置（监听端口 / 线程数 / 日志）
-├── common/             # C++ 公共基础库 (libcommon.a)：config / logger / protocol
-├── gateway/            # 接入网关 (Asio 引擎)：TCP EchoServer (M0)
-├── proto/              # 内部通信协议定义 (M1 接入)
-├── logic/              # 业务逻辑节点 (C++ 宿主 + Lua, M1/M3 接入)
-├── registry/           # 注册中心 (M1 接入)
-├── auth/               # 认证微服务 (M1 接入)
-├── resource/           # 文件与资源服务 (M3 预留)
+├── config/server.json  # 运行时配置（监听 / 线程 / 日志 / jwt / postgres / redis / auth / gateway_grpc）
+├── common/             # 公共基础库 libcommon.a
+│   ├── include/        # config / logger / protocol / codec / message_router
+│   │                   # jwt_auth / password / crypto / pg_pool / redis_pool
+│   └── src/            # 对应实现
+├── gateway/            # 接入网关 (Asio 引擎 + gRPC 控制面)
+│   ├── include/        # tcp_server / session / auth_service / kick_service
+│   └── src/            # main / tcp_server / session / auth_service / kick_service
+├── auth/               # 认证微服务 (beast HTTP)
+│   ├── include/        # auth_handler / http_server
+│   └── src/            # main / auth_handler / http_server
+├── proto/              # 网关控制面 gRPC 接口（gateway.proto + 生成代码）
+├── sql/schema.sql      # users 表 DDL (PostgreSQL)
+├── scripts/            # m1_client_test.py 端到端测试客户端
 ├── tests/              # 单元测试 (googletest)
-└── third-party/        # 第三方依赖 (jsoncpp vendored; spdlog/gtest FetchContent)
+└── third-party/        # jsoncpp/picosha2 vendored; FetchContent(spdlog/gtest/hiredis)
 ```
+
+## 技术栈
+
+| 组件 | 库 | 说明 |
+|---|---|---|
+| 网络 | boost/asio | 跨平台异步 IO |
+| 二进制协议 | 自研 Codec | 长度前缀 + msg_type + seq + body，粘包/拆包 |
+| JWT | 自研（PicoSHA2 做 SHA256） | HS256，标准 header.payload.signature |
+| 密码哈希 | PBKDF2-HMAC-SHA256 | 不存明文 |
+| 数据库 | libpq（官方 C 客户端） | 手写 SQL + 连接池 |
+| Redis | hiredis（官方 C 客户端） | 会话缓存 + 路由表 `conn:{uid}` |
+| HTTP | beast（boost 生态） | AuthServer 鉴权接口 |
+| RPC | gRPC | 网关控制面 KickUser（异地互踢） |
+| JSON/日志 | jsoncpp / spdlog | |
 
 ## 环境依赖
 
-- CMake ≥ 3.24
-- C++20 编译器（MinGW-w64 gcc 或 MSVC）
-- Boost（仅需头文件，`boost/asio`）— 通过 `-DBOOST_ROOT` 指定
-- 首次构建需联网（spdlog / googletest 通过 FetchContent 下载）
+- CMake ≥ 3.24、**MSVC（Visual Studio 2022）**——gRPC 官方不支持 MinGW，故全项目用 MSVC
+- Boost（仅头文件 `boost/asio`）— 通过 `-DBOOST_ROOT` 指定
+- PostgreSQL（运行中，默认 `D:/Program Files/PostgreSQL/17`，链 `libpq.lib`）
+- Redis（可选，缺失时互踢/会话降级）
+- gRPC（已构建的 MSVC Debug 库，默认 `D:/Program Files/grpc`，见 `CMakeLists.txt` 的 `grpc_deps`）
+- 首次构建需联网（spdlog / googletest / hiredis 走 FetchContent，已解压可跳过）
 
 ## 构建
 
 ```bash
-# 在 server 目录下
-cmake -S . -B build -G Ninja -DBOOST_ROOT="D:/Program Files/boost"
-cmake --build build
+# MSVC + Visual Studio 生成器（多配置工程，构建必须带 --config Debug）
+cmake -S . -B build -G "Visual Studio 17 2022" \
+  -DBOOST_ROOT="D:/Program Files/boost" \
+  -DPOSTGRES_ROOT="D:/Program Files/PostgreSQL/17"
+cmake --build build --config Debug
 ```
-
-> 用 `-DBOOST_ROOT=<你的 boost 根目录>` 指定BOOST库路径。
 
 ## 运行
 
 ```bash
-.\build\gateway\gateway.exe config/server.json
+# 1. 建库建表（首次）
+psql -U postgres -c "CREATE DATABASE smart_campus;"
+psql -U postgres -d smart_campus -f sql/schema.sql
+
+# 2. 启动 Redis（会话 / 路由表缓存）
+redis-server --port 6380
+
+# 3. 把 PostgreSQL bin 加入 PATH（供 libpq.dll 加载），分别启动 AuthServer 和 Gateway
+PATH="/d/Program Files/PostgreSQL/17/bin:$PATH"
+./build/auth/Debug/auth.exe config/server.json        # AuthServer: HTTP 8080
+./build/gateway/Debug/gateway.exe config/server.json  # Gateway: TCP 9000 + gRPC 9001
 ```
 
-启动后监听 `0.0.0.0:9000`，收到数据原样回显。
+> PostgreSQL 账号密码在 `config/server.json` 的 `postgres.password`（本地开发使用）。
 
 ## 测试
 
 ```bash
-ctest --test-dir build --output-on-failure
+# 单元测试（codec/jwt/config）
+ctest --test-dir build -C Debug --output-on-failure
+
+# 端到端（HTTP注册/登录 → TCP鉴权 → 心跳 → 异地互踢 via gRPC）
+python scripts/m1_client_test.py
 ```
 
-## M0 验收
+## M1 验收
 
-服务端启动 → 客户端连上 → 发消息回显 → 断线打印日志。可用 `nc` / `telnet`
+注册 → 登录拿到 token → TCP 鉴权 → 心跳 → 第二台设备同账号登录 → 旧连接收到 `KICK_NOTIFY(0x8005)` 并被踢下线（AuthServer 查路由表 `conn:{uid}` → gRPC `KickUser` 精准踢）。

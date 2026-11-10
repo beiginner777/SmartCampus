@@ -20,6 +20,14 @@ std::string read_file(const std::string& path) {
     return ss.str();
 }
 
+// 若存在 key 且为对象，则调用 fn 解析
+template <typename Fn>
+void parse_object(const Json::Value& root, const char* key, Fn&& fn) {
+    if (root.isMember(key) && root[key].isObject()) {
+        fn(root[key]);
+    }
+}
+
 }  // namespace
 
 Config Config::from_json(const std::string& text) {
@@ -45,6 +53,79 @@ Config Config::from_json(const std::string& text) {
     if (root.isMember("log_file")) {
         cfg.log_file = root["log_file"].asString();
     }
+
+    parse_object(root, "jwt", [&](const Json::Value& o) {
+        if (o.isMember("secret")) {
+            cfg.jwt.secret = o["secret"].asString();
+        }
+        if (o.isMember("expire_seconds")) {
+            cfg.jwt.expire_seconds = o["expire_seconds"].asInt();
+        }
+    });
+
+    parse_object(root, "heartbeat", [&](const Json::Value& o) {
+        if (o.isMember("interval_seconds")) {
+            cfg.heartbeat.interval_seconds = o["interval_seconds"].asInt();
+        }
+        if (o.isMember("timeout_seconds")) {
+            cfg.heartbeat.timeout_seconds = o["timeout_seconds"].asInt();
+        }
+    });
+
+    parse_object(root, "postgres", [&](const Json::Value& o) {
+        if (o.isMember("host")) {
+            cfg.postgres.host = o["host"].asString();
+        }
+        if (o.isMember("port")) {
+            cfg.postgres.port = static_cast<uint16_t>(o["port"].asUInt());
+        }
+        if (o.isMember("user")) {
+            cfg.postgres.user = o["user"].asString();
+        }
+        if (o.isMember("password")) {
+            cfg.postgres.password = o["password"].asString();
+        }
+        if (o.isMember("database")) {
+            cfg.postgres.database = o["database"].asString();
+        }
+        if (o.isMember("pool_size")) {
+            cfg.postgres.pool_size = o["pool_size"].asInt();
+        }
+    });
+
+    parse_object(root, "redis", [&](const Json::Value& o) {
+        if (o.isMember("host")) {
+            cfg.redis.host = o["host"].asString();
+        }
+        if (o.isMember("port")) {
+            cfg.redis.port = static_cast<uint16_t>(o["port"].asUInt());
+        }
+        if (o.isMember("password")) {
+            cfg.redis.password = o["password"].asString();
+        }
+        if (o.isMember("pool_size")) {
+            cfg.redis.pool_size = o["pool_size"].asInt();
+        }
+    });
+
+    parse_object(root, "auth", [&](const Json::Value& o) {
+        if (o.isMember("host")) {
+            cfg.auth.host = o["host"].asString();
+        }
+        if (o.isMember("port")) {
+            cfg.auth.port = static_cast<uint16_t>(o["port"].asUInt());
+        }
+    });
+
+    parse_object(root, "gateway_grpc", [&](const Json::Value& o) {
+        if (o.isMember("host")) {
+            cfg.gateway_grpc.host = o["host"].asString();
+        }
+        if (o.isMember("port")) {
+            cfg.gateway_grpc.port = static_cast<uint16_t>(o["port"].asUInt());
+        }
+    });
+
     return cfg;
 }
 
