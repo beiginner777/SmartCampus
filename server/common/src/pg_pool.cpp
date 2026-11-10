@@ -60,6 +60,11 @@ PGresult* run_params(PGconn* conn, const std::string& sql,
     ExecStatusType status = PQresultStatus(res);
     if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK) {
         std::string msg = PQresultErrorMessage(res);
+        // 附上 SQLSTATE 码（locale 无关，便于上层按错误类型分支）
+        const char* sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+        if (sqlstate) {
+            msg = "SQLSTATE " + std::string(sqlstate) + ": " + msg;
+        }
         PQclear(res);
         throw std::runtime_error("SQL 执行失败: " + msg);
     }

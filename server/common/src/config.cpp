@@ -108,6 +108,15 @@ Config Config::from_json(const std::string& text) {
         }
     });
 
+    parse_object(root, "auth", [&](const Json::Value& o) {
+        if (o.isMember("host")) {
+            cfg.auth.host = o["host"].asString();
+        }
+        if (o.isMember("port")) {
+            cfg.auth.port = static_cast<uint16_t>(o["port"].asUInt());
+        }
+    });
+
     return cfg;
 }
 

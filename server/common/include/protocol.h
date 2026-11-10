@@ -20,17 +20,16 @@ constexpr uint32_t kHeaderSize = sizeof(PacketHeader);  // 10 字节
 constexpr uint32_t kMaxPacketSize = 1024 * 1024;        // 单包上限 1MB
 
 // 消息类型：低 15 位为请求/通知编号，0x8000 位表示响应
+// 0x0001/0x0002 原为 register/login，已迁移到 HTTP AuthServer（编号保留不用）
 enum class MsgType : uint16_t {
-    kRegisterReq = 0x0001,
-    kLoginReq = 0x0002,
-    kHeartbeatReq = 0x0003,
-    kLogoutReq = 0x0004,
+    kAuthReq = 0x0006,       // 首包鉴权：携带 JWT token
+    kHeartbeatReq = 0x0003,  // 心跳
+    kLogoutReq = 0x0004,     // 登出
 
-    kRegisterResp = 0x8001,
-    kLoginResp = 0x8002,
+    kAuthResp = 0x8006,
     kHeartbeatResp = 0x8003,
     kLogoutResp = 0x8004,
-    kKickNotify = 0x8005,  // 服务端推送：已在别处登录
+    kKickNotify = 0x8005,    // 服务端推送：已在别处登录/心跳超时
     kError = 0x8000,
 };
 

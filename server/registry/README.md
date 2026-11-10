@@ -1,4 +1,4 @@
-# registry — 注册中心 (原 StatusServer 演进)
+# registry — 注册中心
 
 接收各节点的 TCP/HTTP 心跳，维护可用节点列表（Gateway / Logic 节点注册与发现）。
 

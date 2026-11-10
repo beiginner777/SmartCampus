@@ -17,6 +17,12 @@ struct HeartbeatCfg {
     int timeout_seconds = 90;   // 超过该值未心跳则踢下线
 };
 
+// Auth 服务（HTTP）配置
+struct AuthCfg {
+    std::string host = "0.0.0.0";
+    uint16_t port = 8080;
+};
+
 // PostgreSQL 配置
 struct PostgresCfg {
     std::string host = "127.0.0.1";
@@ -52,6 +58,7 @@ struct Config {
     HeartbeatCfg heartbeat;
     PostgresCfg postgres;
     RedisCfg redis;
+    AuthCfg auth;
 
     // 从 JSON 文本解析 (供加载与单元测试复用), 失败抛 std::runtime_error
     static Config from_json(const std::string& text);

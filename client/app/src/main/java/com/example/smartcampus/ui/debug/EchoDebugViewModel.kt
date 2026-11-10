@@ -26,6 +26,8 @@ class EchoDebugViewModel(
     private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
+    /** ----------- Model ------------- **/
+
     /** 连接状态（透传网络层） */
     val connectionState: StateFlow<ConnectionState> = tcpClient.connectionState
 
@@ -46,6 +48,8 @@ class EchoDebugViewModel(
             }
         }
     }
+
+    /** ----------- View-Model ------------- **/
 
     fun connect(host: String, port: Int) {
         if (host.isBlank()) return

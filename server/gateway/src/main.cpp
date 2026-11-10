@@ -1,7 +1,6 @@
 #include "auth_service.h"
 #include "config.h"
 #include "logger.h"
-#include "pg_pool.h"
 #include "redis_pool.h"
 #include "tcp_server.h"
 
@@ -67,32 +66,17 @@ int main(int argc, char* argv[]) {
 #endif
 
     try {
-        // PostgreSQL（必需）
-        common::PgPool::Options pg_opt;
-        pg_opt.host = cfg.postgres.host;
-        pg_opt.port = cfg.postgres.port;
-        pg_opt.user = cfg.postgres.user;
-        pg_opt.password = cfg.postgres.password;
-        pg_opt.database = cfg.postgres.database;
-        pg_opt.pool_size = cfg.postgres.pool_size;
-        common::PgPool pg(pg_opt);
-        if (!pg.is_available()) {
-            LOG_ERROR("PostgreSQL 连接失败，请检查数据库服务与配置");
-            return 1;
-        }
-        LOG_INFO("PostgreSQL 已连接 ({})", cfg.postgres.database);
-
-        // Redis（可选，不可用时降级）
+        // Redis（互踢 PubSub 协调；缺失时互踢降级）
         common::RedisPool::Options redis_opt;
         redis_opt.host = cfg.redis.host;
         redis_opt.port = cfg.redis.port;
         redis_opt.password = cfg.redis.password;
         redis_opt.pool_size = cfg.redis.pool_size;
         common::RedisPool redis(redis_opt);
-        LOG_INFO("Redis {}", redis.is_available() ? "已连接" : "不可用（互踢/会话降级）");
+        LOG_INFO("Redis {}", redis.is_available() ? "已连接" : "不可用（互踢降级）");
 
-        // 鉴权服务
-        AuthService auth(io, pg, redis, cfg.jwt, cfg.heartbeat);
+        // 鉴权/会话管理（JWT 无状态校验，注册/登录在 AuthServer）
+        AuthService auth(io, redis, cfg.jwt, cfg.heartbeat);
         auth.start();
 
         // TCP 接入

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <queue>
@@ -54,6 +55,11 @@ public:
     bool set(const std::string& key, const std::string& value, int ttl_seconds = 0);
     std::optional<std::string> get(const std::string& key);
     bool del(const std::string& key);
+
+    // 发布消息到频道
+    bool publish(const std::string& channel, const std::string& message);
+    // 订阅频道（独立连接 + 后台线程），收到消息回调 on_message
+    void subscribe(const std::string& channel, std::function<void(const std::string&)> on_message);
 
     bool is_available() const { return available_.load(); }
 

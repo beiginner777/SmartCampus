@@ -1,14 +1,13 @@
 #include "auth_service.h"
 
 #include "logger.h"
-#include "password.h"
 
 #include <json/json.h>
 
 #include <chrono>
 #include <cstdlib>
-#include <ctime>
-#include <utility>
+#include <memory>
+#include <string>
 
 namespace gateway {
 
@@ -30,23 +29,13 @@ void send_json(const AuthService::SessionPtr& s, uint16_t msg_type, uint32_t seq
 
 }  // namespace
 
-AuthService::AuthService(boost::asio::io_context& io, common::PgPool& pg,
-                         common::RedisPool& redis, common::JwtCfg jwt_cfg,
-                         common::HeartbeatCfg hb)
-    : io_(io),
-      pg_(pg),
-      redis_(redis),
-      jwt_(jwt_cfg.secret),
-      jwt_expire_seconds_(jwt_cfg.expire_seconds),
-      hb_(hb) {
+AuthService::AuthService(boost::asio::io_context& io, common::RedisPool& redis,
+                         common::JwtCfg jwt_cfg, common::HeartbeatCfg hb)
+    : io_(io), redis_(redis), jwt_(jwt_cfg.secret), hb_(hb) {
     using common::MsgType;
-    router_.register_handler(static_cast<uint16_t>(MsgType::kRegisterReq),
+    router_.register_handler(static_cast<uint16_t>(MsgType::kAuthReq),
                              [this](SessionPtr s, uint32_t seq, const std::string& b) {
-                                 handle_register(s, seq, b);
-                             });
-    router_.register_handler(static_cast<uint16_t>(MsgType::kLoginReq),
-                             [this](SessionPtr s, uint32_t seq, const std::string& b) {
-                                 handle_login(s, seq, b);
+                                 handle_auth(s, seq, b);
                              });
     router_.register_handler(static_cast<uint16_t>(MsgType::kLogoutReq),
                              [this](SessionPtr s, uint32_t seq, const std::string& b) {
@@ -60,6 +49,12 @@ AuthService::AuthService(boost::asio::io_context& io, common::PgPool& pg,
 
 void AuthService::start() {
     schedule_heartbeat();
+    // 订阅 Redis kick 频道：AuthServer 登录时广播，网关据此踢旧连接（异地互踢）
+    redis_.subscribe("kick", [this](const std::string& msg) {
+        uint32_t uid = static_cast<uint32_t>(std::strtoul(msg.c_str(), nullptr, 10));
+        LOG_INFO("收到互踢通知 uid={}", uid);
+        kick_uid(uid);
+    });
 }
 
 void AuthService::handle_packet(SessionPtr session, const common::Packet& pkt) {
@@ -75,134 +70,45 @@ void AuthService::handle_disconnect(SessionPtr session, const std::string& reaso
     }
     uint32_t uid = session->uid();
     LOG_INFO("用户 {} (uid={}) 断开: {}", session->username(), uid, reason);
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = sessions_.find(uid);
-        if (it != sessions_.end()) {
-            auto s = it->second.lock();
-            if (!s || s.get() == session.get()) {
-                sessions_.erase(it);
-            }
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = sessions_.find(uid);
+    if (it != sessions_.end()) {
+        auto s = it->second.lock();
+        if (!s || s.get() == session.get()) {
+            sessions_.erase(it);
         }
     }
-    // 会话保留在 Redis（token 有效期内可重连）
 }
 
-void AuthService::handle_register(const SessionPtr& session, uint32_t seq,
-                                  const std::string& body) {
+void AuthService::handle_auth(const SessionPtr& session, uint32_t seq,
+                              const std::string& body) {
     Json::Value req;
     Json::Reader reader;
     if (!reader.parse(body, req)) {
         send_error(session, seq, 1, "参数解析失败");
         return;
     }
-    std::string username = req.isMember("username") ? req["username"].asString() : "";
-    std::string password = req.isMember("password") ? req["password"].asString() : "";
-    int role = req.isMember("role") ? req["role"].asInt() : 0;
-    std::string nickname = req.isMember("nickname") ? req["nickname"].asString() : "";
-    std::string tags = req.isMember("tags") ? req["tags"].asString() : "";
+    std::string token = req.isMember("token") ? req["token"].asString() : "";
 
-    if (username.empty() || password.empty()) {
-        send_error(session, seq, 1, "用户名和密码不能为空");
+    common::JwtPayload payload;
+    if (!jwt_.verify(token, payload)) {
+        send_error(session, seq, 6, "无效或过期的 token");
         return;
     }
 
-    std::string hash = common::hash_password(password);
-    try {
-        auto conn = pg_.acquire();
-        conn->execute(
-            "INSERT INTO users(username, password_hash, role, nickname, tags) "
-            "VALUES($1,$2,$3,$4,$5)",
-            {username, hash, std::to_string(role), nickname, tags});
-    } catch (const std::exception& e) {
-        std::string msg = e.what();
-        if (msg.find("duplicate") != std::string::npos ||
-            msg.find("unique") != std::string::npos) {
-            send_error(session, seq, 2, "用户名已存在");
-        } else {
-            LOG_ERROR("注册写库失败: {}", msg);
-            send_error(session, seq, 5, "注册失败");
-        }
-        return;
-    }
-
-    Json::Value resp;
-    resp["code"] = 0;
-    send_json(session, static_cast<uint16_t>(common::MsgType::kRegisterResp), seq, resp);
-    LOG_INFO("注册成功: {}", username);
-}
-
-void AuthService::handle_login(const SessionPtr& session, uint32_t seq,
-                               const std::string& body) {
-    Json::Value req;
-    Json::Reader reader;
-    if (!reader.parse(body, req)) {
-        send_error(session, seq, 1, "参数解析失败");
-        return;
-    }
-    std::string username = req.isMember("username") ? req["username"].asString() : "";
-    std::string password = req.isMember("password") ? req["password"].asString() : "";
-
-    uint32_t uid = 0;
-    std::string hash, nickname, tags;
-    int role = 0;
-    try {
-        auto conn = pg_.acquire();
-        auto res = conn->query(
-            "SELECT id, password_hash, nickname, role, tags FROM users WHERE username=$1",
-            {username});
-        if (res.rows() == 0) {
-            send_error(session, seq, 3, "用户名或密码错误");
-            return;
-        }
-        uid = static_cast<uint32_t>(std::strtoul(res.value(0, 0), nullptr, 10));
-        hash = res.value(0, 1);
-        nickname = res.value(0, 2);
-        role = std::atoi(res.value(0, 3));
-        tags = res.value(0, 4);
-    } catch (const std::exception& e) {
-        LOG_ERROR("登录查询失败: {}", e.what());
-        send_error(session, seq, 5, "数据库错误");
-        return;
-    }
-
-    if (!common::verify_password(password, hash)) {
-        send_error(session, seq, 3, "用户名或密码错误");
-        return;
-    }
-
-    int64_t now = static_cast<int64_t>(std::time(nullptr));
-    int64_t exp = now + jwt_expire_seconds_;
-    std::string token = jwt_.sign(uid, username, exp);
-
-    redis_.set("session:" + std::to_string(uid), token, jwt_expire_seconds_);
-
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = sessions_.find(uid);
-        if (it != sessions_.end()) {
-            auto old = it->second.lock();
-            if (old && old.get() != session.get()) {
-                LOG_INFO("用户 {} (uid={}) 异地登录，踢掉旧连接", username, uid);
-                kick(old, "已在别处登录");
-            }
-        }
-        sessions_[uid] = session;
-    }
-
-    session->set_auth(uid, username);
+    session->set_auth(payload.uid, payload.username);
     session->touch_heartbeat();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sessions_[payload.uid] = session;
+    }
 
     Json::Value resp;
     resp["code"] = 0;
-    resp["token"] = token;
-    resp["uid"] = uid;
-    resp["username"] = username;
-    resp["nickname"] = nickname;
-    resp["role"] = role;
-    resp["tags"] = tags;
-    send_json(session, static_cast<uint16_t>(common::MsgType::kLoginResp), seq, resp);
-    LOG_INFO("登录成功: {} (uid={})", username, uid);
+    resp["uid"] = payload.uid;
+    resp["username"] = payload.username;
+    send_json(session, static_cast<uint16_t>(common::MsgType::kAuthResp), seq, resp);
+    LOG_INFO("连接鉴权成功: {} (uid={})", payload.username, payload.uid);
 }
 
 void AuthService::handle_logout(const SessionPtr& session, uint32_t seq,
@@ -212,7 +118,6 @@ void AuthService::handle_logout(const SessionPtr& session, uint32_t seq,
         return;
     }
     uint32_t uid = session->uid();
-    redis_.del("session:" + std::to_string(uid));
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = sessions_.find(uid);
@@ -254,6 +159,21 @@ void AuthService::kick(const SessionPtr& session, const std::string& reason) {
             session->stop();
         }
     });
+}
+
+void AuthService::kick_uid(uint32_t uid) {
+    std::shared_ptr<Session> target;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = sessions_.find(uid);
+        if (it != sessions_.end()) {
+            target = it->second.lock();
+            sessions_.erase(it);
+        }
+    }
+    if (target) {
+        kick(target, "已在别处登录");
+    }
 }
 
 void AuthService::check_heartbeats() {

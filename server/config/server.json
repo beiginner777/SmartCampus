@@ -25,5 +25,9 @@
     "port": 6380,
     "password": "123456",
     "pool_size": 8
+  },
+  "auth": {
+    "host": "0.0.0.0",
+    "port": 8080
   }
 }

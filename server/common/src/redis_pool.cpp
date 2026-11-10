@@ -162,6 +162,64 @@ bool RedisPool::del(const std::string& key) {
     return ok;
 }
 
+bool RedisPool::publish(const std::string& channel, const std::string& message) {
+    auto conn = acquire();
+    redisContext* ctx = conn.get();
+    if (!ctx) {
+        return false;
+    }
+    redisReply* reply = static_cast<redisReply*>(
+        redisCommand(ctx, "PUBLISH %s %s", channel.c_str(), message.c_str()));
+    bool ok = (reply != nullptr && reply->type != REDIS_REPLY_ERROR);
+    if (reply) {
+        freeReplyObject(reply);
+    }
+    return ok;
+}
+
+void RedisPool::subscribe(const std::string& channel,
+                          std::function<void(const std::string&)> on_message) {
+    // 订阅需要独立连接（SUBSCRIBE 后进入订阅模式，不能再发普通命令），
+    // 用后台线程阻塞接收。进程退出时由 OS 回收（M1 不做优雅停止）。
+    std::thread([this, channel, on_message = std::move(on_message)]() {
+        redisContext* sub = redisConnect(opt_.host.c_str(), opt_.port);
+        if (!sub || sub->err) {
+            LOG_WARN("Redis 订阅连接失败: {}", sub ? sub->errstr : "null");
+            if (sub) {
+                redisFree(sub);
+            }
+            return;
+        }
+        if (!opt_.password.empty()) {
+            redisReply* r = static_cast<redisReply*>(
+                redisCommand(sub, "AUTH %s", opt_.password.c_str()));
+            if (r) {
+                freeReplyObject(r);
+            }
+        }
+        redisReply* r = static_cast<redisReply*>(
+            redisCommand(sub, "SUBSCRIBE %s", channel.c_str()));
+        if (r) {
+            freeReplyObject(r);
+        }
+
+        while (!stop_.load()) {
+            redisReply* reply = nullptr;
+            if (redisGetReply(sub, reinterpret_cast<void**>(&reply)) != REDIS_OK || !reply) {
+                break;
+            }
+            // 消息格式：["message", <channel>, <payload>]
+            if (reply->type == REDIS_REPLY_ARRAY && reply->elements >= 3 &&
+                reply->element[0]->type == REDIS_REPLY_STRING &&
+                std::string(reply->element[0]->str) == "message") {
+                on_message(std::string(reply->element[2]->str, reply->element[2]->len));
+            }
+            freeReplyObject(reply);
+        }
+        redisFree(sub);
+    }).detach();
+}
+
 void RedisPool::health_check_loop() {
     while (!stop_.load()) {
         // 每 30s 检查一次（按秒睡眠以便及时响应停止）

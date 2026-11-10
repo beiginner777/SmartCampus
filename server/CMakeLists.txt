@@ -140,6 +140,7 @@ FetchContent_MakeAvailable(hiredis)
 # ---------------------------------------------------------------------------
 add_subdirectory(common)
 add_subdirectory(gateway)
+add_subdirectory(auth)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
@@ -149,5 +150,4 @@ endif()
 # add_subdirectory(proto)
 # add_subdirectory(logic)
 # add_subdirectory(registry)
-# add_subdirectory(auth)
 # add_subdirectory(resource)
