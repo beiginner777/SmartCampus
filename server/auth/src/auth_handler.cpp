@@ -3,11 +3,37 @@
 #include "logger.h"
 #include "password.h"
 
+#include "gateway.grpc.pb.h"
+#include "gateway.pb.h"
+
+#include <grpcpp/grpcpp.h>
+
 #include <cstdlib>
 #include <ctime>
 #include <string>
 
 namespace auth {
+
+namespace {
+
+// gRPC 踢人：连接指定网关的 KickUser
+void kick_user_via_grpc(const std::string& addr, uint32_t uid) {
+    auto channel = grpc::CreateChannel(addr, grpc::InsecureChannelCredentials());
+    auto stub = gatewayrpc::GatewayControl::NewStub(channel);
+    gatewayrpc::KickUserRequest req;
+    req.set_uid(uid);
+    req.set_reason("已在别处登录");
+    gatewayrpc::KickUserResponse resp;
+    grpc::ClientContext ctx;
+    grpc::Status status = stub->KickUser(&ctx, req, &resp);
+    if (status.ok()) {
+        LOG_INFO("gRPC 踢人成功 uid={} gateway={}", uid, addr);
+    } else {
+        LOG_WARN("gRPC 踢人失败 uid={} gateway={}: {}", uid, addr, status.error_message());
+    }
+}
+
+}  // namespace
 
 Json::Value handle_register(const Json::Value& req, AppState& st) {
     std::string username = req.isMember("username") ? req["username"].asString() : "";
@@ -89,9 +115,14 @@ Json::Value handle_login(const Json::Value& req, AppState& st) {
     int64_t exp = now + st.jwt_expire_seconds;
     std::string token = st.jwt.sign(uid, username, exp);
 
-    // 会话缓存（供网关校验/重连）+ 广播踢人（异地登录互踢）
+    // 会话缓存（供网关校验/重连）
     st.redis.set("session:" + std::to_string(uid), token, st.jwt_expire_seconds);
-    st.redis.publish("kick", std::to_string(uid));
+
+    // 异地登录互踢：查路由表 conn:{uid}，gRPC 通知对应网关踢旧连接
+    auto old_gateway = st.redis.get("conn:" + std::to_string(uid));
+    if (old_gateway) {
+        kick_user_via_grpc(*old_gateway, uid);
+    }
 
     resp["code"] = 0;
     resp["token"] = token;

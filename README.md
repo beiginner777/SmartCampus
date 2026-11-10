@@ -387,7 +387,7 @@ sequenceDiagram
 | `POST /login` | `username` `password` | `{"code":0,"token","uid","username","nickname","role","tags"}` |
 | `POST /refresh` | `token` | `{"code":0,"token"}` |
 
-登录成功后 AuthServer 签发 JWT（HS256，payload `{uid, username, exp}`），写 Redis `session:{uid}`=token，并 `PUBLISH kick {uid}` 通知网关踢旧连接。
+登录成功后 AuthServer 签发 JWT（HS256，payload `{uid, username, exp}`），写 Redis `session:{uid}`=token；若该 uid 已有在线连接，则按路由表 `conn:{uid}` 找到其网关，通过 **gRPC `KickUser`** 精准踢掉旧连接（异地登录互踢）。
 
 ### 2. TCP 二进制协议（Gateway，asio，默认 9000）
 
@@ -404,7 +404,17 @@ sequenceDiagram
 | KICK_NOTIFY | 0x8005 | S→C | `{"reason":"已在别处登录"/"心跳超时"}` |
 | ERROR | 0x8000 | S→C | `{"code","msg"}` |
 
-鉴权流程：客户端 `POST /login` 拿 token → TCP 连网关 → 首包发 `AUTH_REQ{token}` → 网关验 JWT 签名（无状态、不查库）→ 建立鉴权连接 → 周期心跳。异地登录互踢：AuthServer 登录时 `PUBLISH kick {uid}`，网关订阅后踢掉该 uid 的旧连接。
+鉴权流程：客户端 `POST /login` 拿 token → TCP 连网关 → 首包发 `AUTH_REQ{token}` → 网关验 JWT 签名 + 比对 Redis `session:{uid}`（token 新鲜度校验，堵「B 登录早于 A 建连」的竞态漏踢）→ 建立鉴权连接 → 周期心跳。异地登录互踢：AuthServer 登录时查路由表 `conn:{uid}` → gRPC `KickUser` 精准踢掉该 uid 的旧连接。
+
+### 3. 网关控制面 gRPC（Gateway，默认 9001）
+
+服务端内部（AuthServer ↔ Gateway）用 gRPC 协调异地互踢：
+
+| RPC | 请求 | 响应 |
+|-----|------|------|
+| `GatewayControl.KickUser` | `{uid, reason}` | `{code}` |
+
+路由表：网关在连接鉴权成功后写 Redis `conn:{uid}`=本网关 gRPC 地址（`host:port`，TTL=心跳超时）；AuthServer 登录时读它并 gRPC 调 KickUser。这样多网关下也能精准定位到「持有该连接的网关」踢人，而不是广播。
 
 ### 错误码
 

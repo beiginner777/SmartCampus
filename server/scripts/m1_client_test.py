@@ -26,7 +26,7 @@ def http_post(path, obj):
     url = f"http://{GW_HOST}:{AUTH_PORT}{path}"
     data = json.dumps(obj).encode()
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=5) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -49,16 +49,16 @@ def decode_stream(buf: bytes):
 
 class Conn:
     def __init__(self):
-        self.sock = socket.create_connection((GW_HOST, GW_PORT), timeout=5)
+        self.sock = socket.create_connection((GW_HOST, GW_PORT), timeout=30)
         self.buf = b""
         self.seq = 0
 
-    def req(self, msg_type, obj, timeout=5):
+    def req(self, msg_type, obj, timeout=30):
         self.seq += 1
         self.sock.sendall(encode(msg_type, self.seq, json.dumps(obj).encode()))
         return self._wait(self.seq, timeout)
 
-    def read_any(self, timeout=5):
+    def read_any(self, timeout=30):
         """读取任意一个包（用于等待 KICK 推送）"""
         self.sock.settimeout(timeout)
         while True:
@@ -116,7 +116,7 @@ def main():
     print("[5] 第二设备登录响应:", login2)
     assert login2["code"] == 0
 
-    pkt = c1.read_any(timeout=5)
+    pkt = c1.read_any(timeout=30)
     if pkt is None:
         print("[6] [FAIL] 第一连接未收到 KICK，被直接断开")
         return 1

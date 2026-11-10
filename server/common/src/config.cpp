@@ -117,6 +117,15 @@ Config Config::from_json(const std::string& text) {
         }
     });
 
+    parse_object(root, "gateway_grpc", [&](const Json::Value& o) {
+        if (o.isMember("host")) {
+            cfg.gateway_grpc.host = o["host"].asString();
+        }
+        if (o.isMember("port")) {
+            cfg.gateway_grpc.port = static_cast<uint16_t>(o["port"].asUInt());
+        }
+    });
+
     return cfg;
 }
 

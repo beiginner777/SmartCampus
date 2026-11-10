@@ -72,23 +72,24 @@ void Session::send_packet(uint16_t msg_type, uint32_t seq, const std::string& bo
 }
 
 void Session::do_write() {
-    std::string data;
+    std::shared_ptr<std::string> data;
     {
         std::lock_guard<std::mutex> lock(write_mutex_);
         if (write_queue_.empty()) {
             writing_ = false;
             return;
         }
-        data = std::move(write_queue_.front());
+        // 用 shared_ptr 持有：async_write 引用缓冲内存，需存活到写完成
+        data = std::make_shared<std::string>(std::move(write_queue_.front()));
         write_queue_.erase(write_queue_.begin());
     }
     auto self = shared_from_this();
-    boost::asio::async_write(socket_, boost::asio::buffer(data),
-                             [this, self](boost::system::error_code ec, std::size_t /*n*/) {
+    boost::asio::async_write(socket_, boost::asio::buffer(*data),
+                             [self, data](boost::system::error_code ec, std::size_t /*n*/) {
                                  if (ec) {
                                      return;  // 写失败（对端关闭），交给读循环处理
                                  }
-                                 do_write();
+                                 self->do_write();
                              });
 }
 

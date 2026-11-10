@@ -1,13 +1,16 @@
 #include "auth_service.h"
 #include "config.h"
+#include "kick_service.h"
 #include "logger.h"
 #include "redis_pool.h"
 #include "tcp_server.h"
 
 #include <boost/asio.hpp>
+#include <grpcpp/grpcpp.h>
 
 #include <csignal>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -15,6 +18,7 @@
 using common::Config;
 using common::Logger;
 using gateway::AuthService;
+using gateway::KickService;
 using gateway::TcpServer;
 
 namespace {
@@ -75,9 +79,27 @@ int main(int argc, char* argv[]) {
         common::RedisPool redis(redis_opt);
         LOG_INFO("Redis {}", redis.is_available() ? "已连接" : "不可用（互踢降级）");
 
+        // 网关 gRPC 地址（写入路由表，AuthServer 据此踢人）
+        std::string gateway_grpc_addr =
+            cfg.gateway_grpc.host + ":" + std::to_string(cfg.gateway_grpc.port);
+
         // 鉴权/会话管理（JWT 无状态校验，注册/登录在 AuthServer）
-        AuthService auth(io, redis, cfg.jwt, cfg.heartbeat);
+        AuthService auth(io, redis, cfg.jwt, cfg.heartbeat, gateway_grpc_addr);
         auth.start();
+
+        // gRPC 控制面（踢人）
+        KickService kick_service(auth);
+        grpc::ServerBuilder grpc_builder;
+        grpc_builder.AddListeningPort("0.0.0.0:" + std::to_string(cfg.gateway_grpc.port),
+                                      grpc::InsecureServerCredentials());
+        grpc_builder.RegisterService(&kick_service);
+        std::unique_ptr<grpc::Server> grpc_server(grpc_builder.BuildAndStart());
+        if (!grpc_server) {
+            LOG_ERROR("gRPC 控制面启动失败");
+            return 1;
+        }
+        LOG_INFO("gRPC 控制面监听 0.0.0.0:{}", cfg.gateway_grpc.port);
+        std::thread grpc_thread([&grpc_server] { grpc_server->Wait(); });
 
         // TCP 接入
         TcpServer::Options opt;
@@ -104,6 +126,9 @@ int main(int argc, char* argv[]) {
         for (auto& t : pool) {
             t.join();
         }
+
+        grpc_server->Shutdown();
+        grpc_thread.join();
     } catch (const std::exception& e) {
         LOG_ERROR("服务端运行异常: {}", e.what());
         return 1;

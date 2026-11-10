@@ -23,6 +23,12 @@ struct AuthCfg {
     uint16_t port = 8080;
 };
 
+// 网关控制面 gRPC 配置（AuthServer 据此踢人）
+struct GatewayGrpcCfg {
+    std::string host = "127.0.0.1";  // 写入路由表的可连接地址
+    uint16_t port = 9001;
+};
+
 // PostgreSQL 配置
 struct PostgresCfg {
     std::string host = "127.0.0.1";
@@ -59,6 +65,7 @@ struct Config {
     PostgresCfg postgres;
     RedisCfg redis;
     AuthCfg auth;
+    GatewayGrpcCfg gateway_grpc;
 
     // 从 JSON 文本解析 (供加载与单元测试复用), 失败抛 std::runtime_error
     static Config from_json(const std::string& text);

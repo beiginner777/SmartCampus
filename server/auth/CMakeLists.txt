@@ -8,4 +8,5 @@ target_include_directories(auth PRIVATE include)
 
 target_link_libraries(auth PRIVATE
     common
-    boost_asio)
+    boost_asio
+    gateway_proto)

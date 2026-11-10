@@ -30,8 +30,13 @@ void send_json(const AuthService::SessionPtr& s, uint16_t msg_type, uint32_t seq
 }  // namespace
 
 AuthService::AuthService(boost::asio::io_context& io, common::RedisPool& redis,
-                         common::JwtCfg jwt_cfg, common::HeartbeatCfg hb)
-    : io_(io), redis_(redis), jwt_(jwt_cfg.secret), hb_(hb) {
+                         common::JwtCfg jwt_cfg, common::HeartbeatCfg hb,
+                         const std::string& gateway_grpc_addr)
+    : io_(io),
+      redis_(redis),
+      jwt_(jwt_cfg.secret),
+      hb_(hb),
+      gateway_grpc_addr_(gateway_grpc_addr) {
     using common::MsgType;
     router_.register_handler(static_cast<uint16_t>(MsgType::kAuthReq),
                              [this](SessionPtr s, uint32_t seq, const std::string& b) {
@@ -49,12 +54,6 @@ AuthService::AuthService(boost::asio::io_context& io, common::RedisPool& redis,
 
 void AuthService::start() {
     schedule_heartbeat();
-    // 订阅 Redis kick 频道：AuthServer 登录时广播，网关据此踢旧连接（异地互踢）
-    redis_.subscribe("kick", [this](const std::string& msg) {
-        uint32_t uid = static_cast<uint32_t>(std::strtoul(msg.c_str(), nullptr, 10));
-        LOG_INFO("收到互踢通知 uid={}", uid);
-        kick_uid(uid);
-    });
 }
 
 void AuthService::handle_packet(SessionPtr session, const common::Packet& pkt) {
@@ -96,12 +95,27 @@ void AuthService::handle_auth(const SessionPtr& session, uint32_t seq,
         return;
     }
 
+    // 校验 token 新鲜度（堵住异地互踢的竞态）：
+    //   异地互踢的"快路径"依赖路由表 conn:{uid}，而它只在建连时才写。若"B 登录"发生在"A 建连"之前，
+    //   AuthServer 登录时查 conn:{uid} 为空 → 漏踢；A 随后拿旧 token 建连，网关只验 JWT 签名（仍有效）
+    //   仍会放行，导致 A、B 同时在线。
+    //   这里再查 Redis session:{uid}（每次登录都会覆盖成最新 token）：若所带 token 已不是当前 session，
+    //   说明它被更新的登录取代了 → 当场拒绝，堵死竞态。
+    auto current = redis_.get("session:" + std::to_string(payload.uid));
+    if (current && *current != token) {
+        LOG_INFO("拒绝过时 token 建连：uid={}", payload.uid);
+        send_error(session, seq, 6, "token 已失效，请重新登录");
+        return;
+    }
+
     session->set_auth(payload.uid, payload.username);
     session->touch_heartbeat();
     {
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_[payload.uid] = session;
     }
+    // 写路由表：uid → 网关 gRPC 地址（AuthServer 登录时据此精准踢人）
+    redis_.set("conn:" + std::to_string(payload.uid), gateway_grpc_addr_, hb_.timeout_seconds);
 
     Json::Value resp;
     resp["code"] = 0;
@@ -161,7 +175,7 @@ void AuthService::kick(const SessionPtr& session, const std::string& reason) {
     });
 }
 
-void AuthService::kick_uid(uint32_t uid) {
+void AuthService::kick_uid(uint32_t uid, const std::string& reason) {
     std::shared_ptr<Session> target;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -172,7 +186,7 @@ void AuthService::kick_uid(uint32_t uid) {
         }
     }
     if (target) {
-        kick(target, "已在别处登录");
+        kick(target, reason);
     }
 }
 
