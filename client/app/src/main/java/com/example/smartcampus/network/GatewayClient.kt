@@ -137,12 +137,16 @@ class GatewayClient(
         if (_state.value == GatewayState.Idle) return  // 主动断开，无需处理
         _state.value = GatewayState.Disconnected
         if (wantReconnect) {
-            scope.launch {
-                delay(RECONNECT_DELAY_MS)
-                if (wantReconnect) {
-                    _state.value = GatewayState.Connecting
-                    tcpClient.connect(host, port)
-                }
+            scheduleReconnect()
+        }
+    }
+
+    private fun scheduleReconnect() {
+        scope.launch {
+            delay(RECONNECT_DELAY_MS)
+            if (wantReconnect) {
+                _state.value = GatewayState.Connecting
+                tcpClient.connect(host, port)
             }
         }
     }
@@ -174,10 +178,17 @@ class GatewayClient(
 
     private fun handleKick(pkt: Packet) {
         val kick = decodeOrNull<KickNotify>(pkt.body)
-        wantReconnect = false
+        val reason = kick?.reason ?: "已在别处登录"
+        // 「心跳超时」是切后台/网络抖动导致的可恢复断开 → 保留自动重连；
+        // 「已在别处登录」才是真互踢 → 停止重连并弹窗。
+        val recoverable = reason.contains("心跳超时")
         stopHeartbeat()
-        _state.value = GatewayState.Disconnected
-        _events.tryEmit(GatewayEvent.Kicked(kick?.reason ?: "已在别处登录"))
+        authTimeoutJob?.cancel()
+        wantReconnect = recoverable
+        if (!recoverable) {
+            _events.tryEmit(GatewayEvent.Kicked(reason))
+        }
+        // 关闭连接，交由 onDisconnected 依据 wantReconnect 决定是否重连
         tcpClient.disconnect()
     }
 
