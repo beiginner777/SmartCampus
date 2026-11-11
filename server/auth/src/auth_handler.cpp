@@ -91,6 +91,7 @@ Json::Value handle_login(const Json::Value& req, AppState& st) {
         if (res.rows() == 0) {
             resp["code"] = 3;
             resp["msg"] = "用户名或密码错误";
+            LOG_INFO("用户名或密码错误,username:\"{}\",\"password:{}\"", username, password);
             return resp;
         }
         uid = static_cast<uint32_t>(std::strtoul(res.value(0, 0), nullptr, 10));
@@ -108,6 +109,7 @@ Json::Value handle_login(const Json::Value& req, AppState& st) {
     if (!common::verify_password(password, hash)) {
         resp["code"] = 3;
         resp["msg"] = "用户名或密码错误";
+        LOG_INFO("用户名或密码错误,username:\"{}\",\"password:{}\"", username, password);
         return resp;
     }
 

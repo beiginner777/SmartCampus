@@ -6,6 +6,8 @@
 #include <string>
 #include <utility>
 
+#include "logger.h"
+
 namespace auth {
 
 namespace {
@@ -102,7 +104,10 @@ HttpServer::HttpServer(net::io_context& io, const tcp::endpoint& ep, AppState& s
 void HttpServer::do_accept() {
     acceptor_.async_accept([this](beast::error_code ec, tcp::socket socket) {
         if (!ec) {
+            LOG_INFO("accepted new connection: {}", socket.remote_endpoint().address().to_string());
             std::make_shared<HttpSession>(std::move(socket), st_)->run();
+        } else {
+            LOG_ERROR("acceptor accept error: {}", ec.message());
         }
         do_accept();
     });

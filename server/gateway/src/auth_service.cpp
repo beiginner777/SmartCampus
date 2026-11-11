@@ -69,14 +69,18 @@ void AuthService::handle_disconnect(SessionPtr session, const std::string& reaso
     }
     uint32_t uid = session->uid();
     LOG_INFO("用户 {} (uid={}) 断开: {}", session->username(), uid, reason);
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = sessions_.find(uid);
-    if (it != sessions_.end()) {
-        auto s = it->second.lock();
-        if (!s || s.get() == session.get()) {
-            sessions_.erase(it);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = sessions_.find(uid);
+        if (it != sessions_.end()) {
+            auto s = it->second.lock();
+            if (!s || s.get() == session.get()) {
+                sessions_.erase(it);
+            }
         }
     }
+    // 清理路由表 conn:{uid}（连接已断开，不该再指向本网关）；session:{uid} 保留，供断线重连
+    redis_.del("conn:" + std::to_string(uid));
 }
 
 void AuthService::handle_auth(const SessionPtr& session, uint32_t seq,
@@ -142,6 +146,9 @@ void AuthService::handle_logout(const SessionPtr& session, uint32_t seq,
             }
         }
     }
+    // 主动下线：作废会话 token + 清理路由表
+    redis_.del("session:" + std::to_string(uid));
+    redis_.del("conn:" + std::to_string(uid));
     session->set_auth(0, "");
     Json::Value resp;
     resp["code"] = 0;
@@ -155,6 +162,8 @@ void AuthService::handle_heartbeat(const SessionPtr& session, uint32_t seq,
         return;
     }
     session->touch_heartbeat();
+    // 刷新路由表：连接仍在线，conn:{uid} 续期，保证异地互踢的 gRPC 快路径有效
+    redis_.set("conn:" + std::to_string(session->uid()), gateway_grpc_addr_, hb_.timeout_seconds);
     Json::Value resp;
     resp["code"] = 0;
     send_json(session, static_cast<uint16_t>(common::MsgType::kHeartbeatResp), seq, resp);
