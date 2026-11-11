@@ -5,13 +5,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.MaterialTheme
-import com.example.smartcampus.ui.debug.EchoDebugScreen
+import com.example.smartcampus.ui.RootScreen
 
 /**
  * 智慧校园客户端入口。
  *
- * M0：渲染 TCP Echo 联调界面，打通「客户端连服务端 EchoServer → 发消息回显 → 断线打印日志」。
- * M2/M3 起地图、考勤、聊天等业务界面在本模块逐步接入。
+ * M1：登录/注册 → TCP 鉴权 → 心跳 → 异地互踢全链路，入口为 [RootScreen]。
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -19,7 +18,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
-                EchoDebugScreen()
+                RootScreen()
             }
         }
     }

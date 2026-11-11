@@ -15,45 +15,50 @@ import kotlinx.serialization.Serializable
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 /**
- * 本地配置仓库（Preferences DataStore）。
+ * 服务端地址配置仓库（Preferences DataStore）。
  *
- * M0 用于持久化服务端地址/端口，供 echo 联调界面预填；
- * M1 起会扩展：JWT 令牌存储、登录态等。
+ * 持久化服务端 host + 网关 TCP 端口 + Auth HTTP 端口，供登录/重连使用。
  */
 class SettingsRepository(private val context: Context) {
 
-    /** 最近一次保存的服务端配置（首次启动返回默认值） */
+    /** 服务端地址配置（首次启动返回默认值） */
     val serverConfig: Flow<ServerConfig> = context.dataStore.data.map { prefs ->
         ServerConfig(
             host = prefs[Keys.SERVER_HOST] ?: DEFAULT_HOST,
-            port = prefs[Keys.SERVER_PORT] ?: DEFAULT_PORT,
+            gatewayPort = prefs[Keys.SERVER_GATEWAY_PORT] ?: DEFAULT_GATEWAY_PORT,
+            authPort = prefs[Keys.SERVER_AUTH_PORT] ?: DEFAULT_AUTH_PORT,
         )
     }
 
-    suspend fun saveServerConfig(host: String, port: Int) {
+    suspend fun saveServerConfig(config: ServerConfig) {
         context.dataStore.edit { prefs ->
-            prefs[Keys.SERVER_HOST] = host
-            prefs[Keys.SERVER_PORT] = port
+            prefs[Keys.SERVER_HOST] = config.host
+            prefs[Keys.SERVER_GATEWAY_PORT] = config.gatewayPort
+            prefs[Keys.SERVER_AUTH_PORT] = config.authPort
         }
     }
 
     private object Keys {
         val SERVER_HOST = stringPreferencesKey("server_host")
-        val SERVER_PORT = intPreferencesKey("server_port")
+        val SERVER_GATEWAY_PORT = intPreferencesKey("server_gateway_port")
+        val SERVER_AUTH_PORT = intPreferencesKey("server_auth_port")
     }
 
-    /**
-     * 服务端连接配置。
-     *
-     * 标注 [Serializable]：M1 的 AuthServer 走 HTTP + JSON，届时此配置可直接序列化交互；
-     * M0 仅引入序列化依赖并在此落地，验证插件链路。
-     */
+    /** 服务端连接配置 */
     @Serializable
-    data class ServerConfig(val host: String, val port: Int)
+    data class ServerConfig(
+        val host: String,
+        val gatewayPort: Int,
+        val authPort: Int,
+    ) {
+        /** HTTP AuthServer base URL */
+        val authBaseUrl: String get() = "http://$host:$authPort"
+    }
 
     companion object {
         // 模拟器访问宿主机回环用 10.0.2.2；真机联调改为服务端所在电脑的局域网 IP
-        const val DEFAULT_HOST = "10.0.2.2"
-        const val DEFAULT_PORT = 9000
+        const val DEFAULT_HOST = "10.40.95.46"
+        const val DEFAULT_GATEWAY_PORT = 9000
+        const val DEFAULT_AUTH_PORT = 8080
     }
 }

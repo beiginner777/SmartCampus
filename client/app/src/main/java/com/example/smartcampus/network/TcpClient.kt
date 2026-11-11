@@ -1,6 +1,9 @@
 package com.example.smartcampus.network
 
 import android.util.Log
+import com.example.smartcampus.network.protocol.Packet
+import com.example.smartcampus.network.protocol.PacketDecoder
+import com.example.smartcampus.network.protocol.encodePacket
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,15 +23,16 @@ import java.io.BufferedOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketException
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 原生 TCP 客户端（M0：对接服务端 EchoServer）。
+ * 原生 TCP 传输层（M1：二进制分帧协议）。
  *
- * 采用 `java.net.Socket` + 协程，而非 OkHttp（OkHttp 不支持裸 TCP 长连接）。
- * 与服务端 C++ `boost/asio` 网关直连：M0 服务端仅做原样回显（echo），
- * M1 起在此之上叠加自定义二进制协议（长度前缀 + 消息类型 + 序列号 + body，见 [codec] TODO）。
+ * 负责「连接管理 + 帧收发 + 粘包/拆包」，**不关心业务语义**：
+ *   - 发送：把 (msgType, seq, body) 编码成一帧写出；
+ *   - 接收：读循环喂给 [PacketDecoder]，把切出的完整 [Packet] 上抛给上层。
  *
- * 职责：连接管理、异步读循环、发送、断线回调，状态/日志通过 Flow 暴露给上层。
+ * 会话/鉴权/心跳/互踢等业务逻辑在上层 [GatewayClient]。
  */
 class TcpClient(private val scope: CoroutineScope) {
 
@@ -36,7 +40,11 @@ class TcpClient(private val scope: CoroutineScope) {
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    /** 日志流：连接 / 发送 / 回显 / 断线等事件，供 UI 展示 */
+    /** 收到的完整包（上层据此分发业务） */
+    private val _packets = MutableSharedFlow<Packet>(extraBufferCapacity = 64)
+    val packets: SharedFlow<Packet> = _packets.asSharedFlow()
+
+    /** 日志流：连接 / 发送 / 断线等事件，供调试展示 */
     private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 64)
     val logs: SharedFlow<String> = _logs.asSharedFlow()
 
@@ -44,8 +52,9 @@ class TcpClient(private val scope: CoroutineScope) {
     private var output: BufferedOutputStream? = null
     private var connectionJob: Job? = null
 
-    // 串行化写操作：M0 防止并发写同一输出流，M1 起保证二进制协议帧按序发出
+    // 串行化写操作（保证帧按序发出）；seq 单调递增
     private val writeMutex = Mutex()
+    private val seqCounter = AtomicInteger(0)
 
     /** 连接服务端；连接中/已连接时重复调用会被忽略 */
     fun connect(host: String, port: Int) {
@@ -95,23 +104,30 @@ class TcpClient(private val scope: CoroutineScope) {
         }
     }
 
-    /** 发送一条消息；未连接时忽略。写操作抛到 IO 线程执行，避免主线程网络 IO 抛 NetworkOnMainThreadException */
-    fun send(text: String) {
+    /** 发送一帧（自动分配 seq），返回该 seq；未连接时返回 -1 */
+    fun send(msgType: Int, body: ByteArray): Int {
+        val seq = seqCounter.incrementAndGet()
+        send(msgType, seq, body)
+        return seq
+    }
+
+    /** 发送一帧（指定 seq）。写操作抛到 IO 线程执行，避免主线程网络 IO 抛 NetworkOnMainThreadException */
+    fun send(msgType: Int, seq: Int, body: ByteArray) {
         val current = socket ?: run {
             emitLog("发送失败: 尚未连接")
             return
         }
+        val frame = encodePacket(msgType, seq, body)
         scope.launch {
             writeMutex.withLock {
                 try {
-                    val bytes = text.toByteArray(Charsets.UTF_8)
                     // 复用同一输出流，避免每次发送都重新包装底层 OutputStream
                     val out = output ?: BufferedOutputStream(current.getOutputStream()).also { output = it }
-                    out.write(bytes)
+                    out.write(frame)
                     out.flush()
-                    emitLog("发送(${bytes.size} B): $text")
+                    emitLog("发送 0x${msgType.toString(16).padStart(4, '0')} seq=$seq (${body.size} B)")
                 } catch (e: Exception) {
-                    // 写失败 => 连接已损坏（对端关闭/网络中断）。别只打印 e.message（可能为 null），
+                    // 写失败 => 连接已损坏。别只打印 e.message（可能为 null），
                     // 打异常类型 + 完整堆栈，并同步触发断线清理（否则状态仍停留「已连接」）。
                     Log.e(TAG, "发送失败 class=${e.javaClass.name}", e)
                     emitLog("发送失败: ${e.javaClass.simpleName}: ${e.message ?: "(无 detail message)"}")
@@ -121,10 +137,11 @@ class TcpClient(private val scope: CoroutineScope) {
         }
     }
 
-    /** 阻塞读循环：读到数据原样打印回显，读到 EOF / 异常则判定断线 */
+    /** 阻塞读循环：喂 PacketDecoder 切帧，完整包上抛 */
     private suspend fun runReadLoop(sock: Socket) {
         val input = BufferedInputStream(sock.getInputStream())
         val buffer = ByteArray(READ_BUFFER_SIZE)
+        val decoder = PacketDecoder()
         try {
             while (true) {
                 val count = withContext(Dispatchers.IO) { input.read(buffer) }
@@ -132,9 +149,13 @@ class TcpClient(private val scope: CoroutineScope) {
                     handleDisconnect("服务端关闭连接")
                     return
                 }
-                val echoed = String(buffer, 0, count, Charsets.UTF_8)
-                Log.d(TAG, "echo($count B): $echoed")
-                emitLog("回显($count B): $echoed")
+                val packets = decoder.feed(buffer, count)
+                if (decoder.hasError) {
+                    emitLog("协议错误，断开连接")
+                    handleDisconnect("协议错误")
+                    return
+                }
+                packets.forEach { _packets.tryEmit(it) }
             }
         } catch (e: CancellationException) {
             throw e
@@ -166,7 +187,7 @@ class TcpClient(private val scope: CoroutineScope) {
 
     companion object {
         private const val TAG = "TcpClient"
-        private const val CONNECT_TIMEOUT_MS = 5_000
+        private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_BUFFER_SIZE = 4096
     }
 }

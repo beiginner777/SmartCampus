@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- M1：AuthServer 走 HTTP（本地局域网明文），Android 9+ 默认禁止明文，这里放开 -->
     <application
         android:name=".SmartCampusApp"
         android:allowBackup="true"
@@ -12,7 +13,8 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.SmartCampus">
+        android:theme="@style/Theme.SmartCampus"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
