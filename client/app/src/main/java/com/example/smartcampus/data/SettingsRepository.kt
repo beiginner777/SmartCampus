@@ -57,7 +57,7 @@ class SettingsRepository(private val context: Context) {
 
     companion object {
         // 模拟器访问宿主机回环用 10.0.2.2；真机联调改为服务端所在电脑的局域网 IP
-        const val DEFAULT_HOST = "10.40.95.46"
+        const val DEFAULT_HOST = "10.40.89.74"
         const val DEFAULT_GATEWAY_PORT = 9000
         const val DEFAULT_AUTH_PORT = 8080
     }

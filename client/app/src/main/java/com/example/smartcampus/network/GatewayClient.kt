@@ -4,6 +4,12 @@ import com.example.smartcampus.data.dto.ApiResponse
 import com.example.smartcampus.data.dto.AuthRequest
 import com.example.smartcampus.data.dto.AuthResponse
 import com.example.smartcampus.data.dto.KickNotify
+import com.example.smartcampus.data.dto.NearbyUser
+import com.example.smartcampus.data.dto.PositionReportReq
+import com.example.smartcampus.data.dto.PositionReportResp
+import com.example.smartcampus.data.dto.PositionUpdate
+import com.example.smartcampus.data.dto.UserEnter
+import com.example.smartcampus.data.dto.UserLeave
 import com.example.smartcampus.network.protocol.MsgType
 import com.example.smartcampus.network.protocol.Packet
 import kotlinx.coroutines.CoroutineScope
@@ -15,6 +21,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -59,6 +66,10 @@ class GatewayClient(
     private val _events = MutableSharedFlow<GatewayEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<GatewayEvent> = _events.asSharedFlow()
 
+    /** 附近在线用户（uid → 用户），由服务端 USER_ENTER/LEAVE/UPDATE + POSITION_REPORT_RESP 增量维护 */
+    private val _presence = MutableStateFlow<Map<Long, NearbyUser>>(emptyMap())
+    val presence: StateFlow<Map<Long, NearbyUser>> = _presence.asStateFlow()
+
     private var host = ""
     private var port = 0
     private var token = ""
@@ -100,6 +111,13 @@ class GatewayClient(
         _state.value = GatewayState.Idle
     }
 
+    /** 上报坐标（仅鉴权成功后才发） */
+    fun sendPosition(lng: Double, lat: Double) {
+        if (_state.value != GatewayState.Authed) return
+        val body = json.encodeToString(PositionReportReq(lng, lat)).toByteArray(Charsets.UTF_8)
+        tcpClient.send(MsgType.POSITION_REPORT_REQ, body)
+    }
+
     private fun observeTransport() {
         scope.launch {
             tcpClient.connectionState.collect { st ->
@@ -134,6 +152,7 @@ class GatewayClient(
     private fun onDisconnected(reason: String) {
         stopHeartbeat()
         authTimeoutJob?.cancel()
+        _presence.value = emptyMap()  // 断线清空附近用户，重连后由 POSITION_REPORT_RESP 重建
         if (_state.value == GatewayState.Idle) return  // 主动断开，无需处理
         _state.value = GatewayState.Disconnected
         if (wantReconnect) {
@@ -158,6 +177,10 @@ class GatewayClient(
             MsgType.LOGOUT_RESP -> Unit
             MsgType.KICK_NOTIFY -> handleKick(pkt)
             MsgType.ERROR -> handleError(pkt)
+            MsgType.POSITION_REPORT_RESP -> handlePositionResp(pkt)
+            MsgType.USER_ENTER -> handleUserEnter(pkt)
+            MsgType.USER_LEAVE -> handleUserLeave(pkt)
+            MsgType.POSITION_UPDATE -> handlePositionUpdate(pkt)
             else -> Unit
         }
     }
@@ -201,6 +224,30 @@ class GatewayClient(
             wantReconnect = false
             _events.tryEmit(GatewayEvent.AuthFailed(err?.msg ?: "未知错误"))
             tcpClient.disconnect()
+        }
+    }
+
+    private fun handlePositionResp(pkt: Packet) {
+        val resp = decodeOrNull<PositionReportResp>(pkt.body) ?: return
+        if (resp.code != 0) return
+        _presence.value = resp.nearby.associateBy { it.uid }
+    }
+
+    private fun handleUserEnter(pkt: Packet) {
+        val u = decodeOrNull<UserEnter>(pkt.body) ?: return
+        _presence.update { it + (u.uid to NearbyUser(u.uid, u.lng, u.lat, u.nickname)) }
+    }
+
+    private fun handleUserLeave(pkt: Packet) {
+        val u = decodeOrNull<UserLeave>(pkt.body) ?: return
+        _presence.update { it - u.uid }
+    }
+
+    private fun handlePositionUpdate(pkt: Packet) {
+        val u = decodeOrNull<PositionUpdate>(pkt.body) ?: return
+        _presence.update { map ->
+            val existing = map[u.uid] ?: return@update map
+            map + (u.uid to existing.copy(lng = u.lng, lat = u.lat))
         }
     }
 

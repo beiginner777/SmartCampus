@@ -12,11 +12,11 @@ import com.example.smartcampus.SmartCampusApp
 import com.example.smartcampus.ui.auth.AuthViewModel
 import com.example.smartcampus.ui.auth.LoginScreen
 import com.example.smartcampus.ui.auth.RegisterScreen
-import com.example.smartcampus.ui.home.HomeScreen
-import com.example.smartcampus.ui.home.HomeViewModel
+import com.example.smartcampus.ui.map.MapScreen
+import com.example.smartcampus.ui.map.MapViewModel
 
 /**
- * 顶层路由：未登录 → 登录/注册；已登录 → 主界面。
+ * 顶层路由：未登录 → 登录/注册；已登录 → 地图主界面。
  */
 @Composable
 fun RootScreen() {
@@ -24,14 +24,14 @@ fun RootScreen() {
     val container = app.container
 
     val authViewModel: AuthViewModel = viewModel(factory = AuthViewModel.factory(container))
-    val homeViewModel: HomeViewModel = viewModel(factory = HomeViewModel.factory(container))
+    val mapViewModel: MapViewModel = viewModel(factory = MapViewModel.factory(container))
 
     val session by container.authRepository.session.collectAsState(initial = null)
 
     if (session == null) {
         AuthScreen(authViewModel)
     } else {
-        HomeScreen(session = session!!, viewModel = homeViewModel)
+        MapScreen(session = session!!, viewModel = mapViewModel)
     }
 }
 

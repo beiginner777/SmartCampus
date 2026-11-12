@@ -12,12 +12,17 @@ object MsgType {
     const val HEARTBEAT_REQ = 0x0003  // 心跳
     const val LOGOUT_REQ = 0x0004     // 登出
     const val AUTH_REQ = 0x0006       // 首包鉴权：携带 JWT token
+    const val POSITION_REPORT_REQ = 0x0007  // 坐标上报（M2 AOI）
 
     // —— 响应 / 推送（服务端 → 客户端）——
     const val HEARTBEAT_RESP = 0x8003
     const val LOGOUT_RESP = 0x8004
     const val KICK_NOTIFY = 0x8005    // 服务端推送：已在别处登录 / 心跳超时
     const val AUTH_RESP = 0x8006
+    const val POSITION_REPORT_RESP = 0x8007  // 坐标上报响应（带 nearby）
+    const val USER_ENTER = 0x8008            // 推送：附近用户进入
+    const val USER_LEAVE = 0x8009            // 推送：附近用户离开
+    const val POSITION_UPDATE = 0x800A       // 推送：附近用户坐标更新
     const val ERROR = 0x8000          // 通用错误
 
     /** 0x8000 位为响应标志 */

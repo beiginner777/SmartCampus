@@ -4,6 +4,9 @@
     <!-- M0：TCP 长连接（EchoServer 联调）与网络状态探测 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- M2：定位（持续定位 + 坐标上报） -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- M1：AuthServer 走 HTTP（本地局域网明文），Android 9+ 默认禁止明文，这里放开 -->
     <application
@@ -15,6 +18,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SmartCampus"
         android:usesCleartextTraffic="true">
+
+        <!-- 高德地图 key（local.properties 的 AMAP_KEY 注入） -->
+        <meta-data
+            android:name="com.amap.api.v2.apikey"
+            android:value="${AMAP_KEY}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

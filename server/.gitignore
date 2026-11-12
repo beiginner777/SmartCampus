@@ -42,6 +42,10 @@ third-party/libpq/
 logs/
 *.log
 
+# ================= Python =================
+__pycache__/
+*.pyc
+
 # ================= IDE / 编辑器 =================
 .vscode/
 .idea/

@@ -20,9 +20,10 @@ void Session::stop() {
     socket_.close(ec);
 }
 
-void Session::set_auth(uint32_t uid, std::string username) {
+void Session::set_auth(uint32_t uid, std::string username, std::string nickname) {
     uid_ = uid;
     username_ = std::move(username);
+    nickname_ = std::move(nickname);
 }
 
 void Session::touch_heartbeat() {

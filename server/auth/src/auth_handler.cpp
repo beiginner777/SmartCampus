@@ -115,7 +115,7 @@ Json::Value handle_login(const Json::Value& req, AppState& st) {
 
     int64_t now = static_cast<int64_t>(std::time(nullptr));
     int64_t exp = now + st.jwt_expire_seconds;
-    std::string token = st.jwt.sign(uid, username, exp);
+    std::string token = st.jwt.sign(uid, username, exp, nickname);
 
     // 会话缓存（供网关校验/重连）
     st.redis.set("session:" + std::to_string(uid), token, st.jwt_expire_seconds);
@@ -148,7 +148,7 @@ Json::Value handle_refresh(const Json::Value& req, AppState& st) {
     }
     int64_t now = static_cast<int64_t>(std::time(nullptr));
     int64_t exp = now + st.jwt_expire_seconds;
-    std::string new_token = st.jwt.sign(payload.uid, payload.username, exp);
+    std::string new_token = st.jwt.sign(payload.uid, payload.username, exp, payload.nickname);
     resp["code"] = 0;
     resp["token"] = new_token;
     return resp;

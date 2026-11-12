@@ -34,7 +34,8 @@ public:
     bool authenticated() const { return uid_ != 0; }
     uint32_t uid() const { return uid_; }
     const std::string& username() const { return username_; }
-    void set_auth(uint32_t uid, std::string username);
+    const std::string& nickname() const { return nickname_; }
+    void set_auth(uint32_t uid, std::string username, std::string nickname);
 
     // 心跳
     void touch_heartbeat();
@@ -61,6 +62,7 @@ private:
 
     uint32_t uid_ = 0;
     std::string username_;
+    std::string nickname_;
     std::chrono::steady_clock::time_point last_heartbeat_;
 };
 

@@ -29,10 +29,12 @@ std::vector<std::string> split(const std::string& s, char sep) {
 
 JwtAuth::JwtAuth(std::string secret) : secret_(std::move(secret)) {}
 
-std::string JwtAuth::sign(uint32_t uid, const std::string& username, int64_t exp) const {
+std::string JwtAuth::sign(uint32_t uid, const std::string& username, int64_t exp,
+                          const std::string& nickname) const {
     Json::Value payload;
     payload["uid"] = static_cast<Json::Value::UInt>(uid);
     payload["username"] = username;
+    payload["nickname"] = nickname;
     payload["exp"] = static_cast<Json::Value::Int>(exp);  // jsoncpp 0.5.0 仅 32 位 int
 
     Json::FastWriter writer;
@@ -76,6 +78,7 @@ bool JwtAuth::verify(const std::string& token, JwtPayload& out) const {
 
     out.uid = root.isMember("uid") ? root["uid"].asUInt() : 0;
     out.username = root.isMember("username") ? root["username"].asString() : "";
+    out.nickname = root.isMember("nickname") ? root["nickname"].asString() : "";
     out.exp = root.isMember("exp") ? static_cast<int64_t>(root["exp"].asInt()) : 0;
 
     if (out.exp > 0) {

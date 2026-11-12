@@ -373,7 +373,7 @@ sequenceDiagram
     
 5. **动静分离**：彻底剥离大文件传输，采用云存储直传与 CDN 加速，让核心网关专注高并发信令。
 
-## 六、 通信协议定义（M1 阶段）
+## 六、 通信协议定义（M1 + M2）
 
 服务端对外分两层通信：**HTTP（AuthServer，鉴权）** 与 **TCP 二进制协议（Gateway，长连接）**。
 
@@ -403,8 +403,15 @@ sequenceDiagram
 | LOGOUT_RESP | 0x8004 | S→C | `{"code"}` |
 | KICK_NOTIFY | 0x8005 | S→C | `{"reason":"已在别处登录"/"心跳超时"}` |
 | ERROR | 0x8000 | S→C | `{"code","msg"}` |
+| POSITION_REPORT_REQ | 0x0007 | C→S | `{"lng","lat"}` |
+| POSITION_REPORT_RESP | 0x8007 | S→C | `{"code","nearby":[{"uid","lng","lat","nickname"}]}` |
+| USER_ENTER | 0x8008 | S→C(推) | `{"uid","lng","lat","nickname"}` |
+| USER_LEAVE | 0x8009 | S→C(推) | `{"uid"}` |
+| POSITION_UPDATE | 0x800A | S→C(推) | `{"uid","lng","lat"}` |
 
 鉴权流程：客户端 `POST /login` 拿 token → TCP 连网关 → 首包发 `AUTH_REQ{token}` → 网关验 JWT 签名 + 比对 Redis `session:{uid}`（token 新鲜度校验，堵「B 登录早于 A 建连」的竞态漏踢）→ 建立鉴权连接 → 周期心跳。异地登录互踢：AuthServer 登录时查路由表 `conn:{uid}` → gRPC `KickUser` 精准踢掉该 uid 的旧连接。
+
+坐标上报（M2 AOI）：客户端 AUTH 后周期上报 `POSITION_REPORT{lng,lat}`（约 3s 或移动时，lng/lat 为 WGS84 经纬度、6 位小数≈0.1m）。首次上报时服务端将其纳入 AOI 九宫格，广播 `USER_ENTER` 给邻格用户，并回 `POSITION_REPORT_RESP` 携带附近用户列表 `nearby`；后续同格移动广播 `POSITION_UPDATE`、跨格移动广播 `USER_LEAVE`（旧邻格）+ `USER_ENTER`（新邻格）；下线（logout/断线）广播 `USER_LEAVE` 给邻格。心跳 `HEARTBEAT` 仍负责连接保活，与坐标上报相互独立。
 
 ### 3. 网关控制面 gRPC（Gateway，默认 9001）
 

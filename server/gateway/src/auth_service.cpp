@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace gateway {
 
@@ -25,6 +26,30 @@ std::string json_to_string(const Json::Value& v) {
 void send_json(const AuthService::SessionPtr& s, uint16_t msg_type, uint32_t seq,
                const Json::Value& v) {
     s->send_packet(msg_type, seq, json_to_string(v));
+}
+
+// 组装 M2 广播消息 body
+std::string make_user_enter(uint32_t uid, double lat, double lng, const std::string& nickname) {
+    Json::Value v;
+    v["uid"] = uid;
+    v["lng"] = lng;
+    v["lat"] = lat;
+    v["nickname"] = nickname;
+    return json_to_string(v);
+}
+
+std::string make_user_leave(uint32_t uid) {
+    Json::Value v;
+    v["uid"] = uid;
+    return json_to_string(v);
+}
+
+std::string make_position_update(uint32_t uid, double lat, double lng) {
+    Json::Value v;
+    v["uid"] = uid;
+    v["lng"] = lng;
+    v["lat"] = lat;
+    return json_to_string(v);
 }
 
 }  // namespace
@@ -50,6 +75,10 @@ AuthService::AuthService(boost::asio::io_context& io, common::RedisPool& redis,
                              [this](SessionPtr s, uint32_t seq, const std::string& b) {
                                  handle_heartbeat(s, seq, b);
                              });
+    router_.register_handler(static_cast<uint16_t>(MsgType::kPositionReportReq),
+                             [this](SessionPtr s, uint32_t seq, const std::string& b) {
+                                 handle_position_report(s, seq, b);
+                             });
 }
 
 void AuthService::start() {
@@ -69,6 +98,7 @@ void AuthService::handle_disconnect(SessionPtr session, const std::string& reaso
     }
     uint32_t uid = session->uid();
     LOG_INFO("用户 {} (uid={}) 断开: {}", session->username(), uid, reason);
+    bool offline = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = sessions_.find(uid);
@@ -76,11 +106,16 @@ void AuthService::handle_disconnect(SessionPtr session, const std::string& reaso
             auto s = it->second.lock();
             if (!s || s.get() == session.get()) {
                 sessions_.erase(it);
+                offline = true;
             }
         }
     }
     // 清理路由表 conn:{uid}（连接已断开，不该再指向本网关）；session:{uid} 保留，供断线重连
     redis_.del("conn:" + std::to_string(uid));
+    // 仅当用户彻底下线（无新连接接管）时，才从 AOI 移除并广播离开
+    if (offline) {
+        remove_from_aoi(uid);
+    }
 }
 
 void AuthService::handle_auth(const SessionPtr& session, uint32_t seq,
@@ -112,7 +147,7 @@ void AuthService::handle_auth(const SessionPtr& session, uint32_t seq,
         return;
     }
 
-    session->set_auth(payload.uid, payload.username);
+    session->set_auth(payload.uid, payload.username, payload.nickname);
     session->touch_heartbeat();
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -136,6 +171,7 @@ void AuthService::handle_logout(const SessionPtr& session, uint32_t seq,
         return;
     }
     uint32_t uid = session->uid();
+    bool offline = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = sessions_.find(uid);
@@ -143,13 +179,17 @@ void AuthService::handle_logout(const SessionPtr& session, uint32_t seq,
             auto s = it->second.lock();
             if (!s || s.get() == session.get()) {
                 sessions_.erase(it);
+                offline = true;
             }
         }
     }
     // 主动下线：作废会话 token + 清理路由表
     redis_.del("session:" + std::to_string(uid));
     redis_.del("conn:" + std::to_string(uid));
-    session->set_auth(0, "");
+    session->set_auth(0, "", "");
+    if (offline) {
+        remove_from_aoi(uid);
+    }
     Json::Value resp;
     resp["code"] = 0;
     send_json(session, static_cast<uint16_t>(common::MsgType::kLogoutResp), seq, resp);
@@ -195,28 +235,37 @@ void AuthService::kick_uid(uint32_t uid, const std::string& reason) {
         }
     }
     if (target) {
+        remove_from_aoi(uid);
         kick(target, reason);
     }
 }
 
 void AuthService::check_heartbeats() {
     auto now = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto it = sessions_.begin(); it != sessions_.end();) {
-        auto s = it->second.lock();
-        if (!s) {
-            it = sessions_.erase(it);
-            continue;
+    std::vector<SessionPtr> to_kick;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto it = sessions_.begin(); it != sessions_.end();) {
+            auto s = it->second.lock();
+            if (!s) {
+                it = sessions_.erase(it);
+                continue;
+            }
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::seconds>(now - s->last_heartbeat()).count();
+            if (elapsed > hb_.timeout_seconds) {
+                to_kick.push_back(s);
+                it = sessions_.erase(it);
+            } else {
+                ++it;
+            }
         }
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::seconds>(now - s->last_heartbeat()).count();
-        if (elapsed > hb_.timeout_seconds) {
-            LOG_INFO("用户 {} (uid={}) 心跳超时，踢下线", s->username(), s->uid());
-            kick(s, "心跳超时");
-            it = sessions_.erase(it);
-        } else {
-            ++it;
-        }
+    }
+    // 锁外处理：remove_from_aoi 内部会再取 sessions_ 锁，避免死锁
+    for (auto& s : to_kick) {
+        LOG_INFO("用户 {} (uid={}) 心跳超时，踢下线", s->username(), s->uid());
+        remove_from_aoi(s->uid());
+        kick(s, "心跳超时");
     }
 }
 
@@ -233,6 +282,107 @@ void AuthService::schedule_heartbeat() {
         check_heartbeats();
         schedule_heartbeat();
     });
+}
+
+void AuthService::handle_position_report(const SessionPtr& session, uint32_t seq,
+                                         const std::string& body) {
+    if (!session->authenticated()) {
+        send_error(session, seq, 4, "未登录");
+        return;
+    }
+    Json::Value req;
+    Json::Reader reader;
+    if (!reader.parse(body, req)) {
+        send_error(session, seq, 1, "参数解析失败");
+        return;
+    }
+    double lng = req.isMember("lng") ? req["lng"].asDouble() : 0.0;
+    double lat = req.isMember("lat") ? req["lat"].asDouble() : 0.0;
+    uint32_t uid = session->uid();
+
+    // 写 Redis 坐标缓存（供跨网关 / 找搭子 / 帖子过滤查询）
+    redis_.set("coord:" + std::to_string(uid), std::to_string(lat) + "," + std::to_string(lng));
+
+    if (!aoi_.contains(uid)) {
+        // 首次上报：纳入网格，回 nearby + 广播 USER_ENTER
+        auto nearby = aoi_.enter(uid, lat, lng);
+        Json::Value resp;
+        resp["code"] = 0;
+        Json::Value arr(Json::arrayValue);
+        for (auto& n : nearby) {
+            Json::Value o;
+            o["uid"] = n.uid;
+            o["lng"] = n.lng;
+            o["lat"] = n.lat;
+            o["nickname"] = nickname_of(n.uid);
+            arr.append(o);
+        }
+        resp["nearby"] = arr;
+        send_json(session, static_cast<uint16_t>(common::MsgType::kPositionReportResp), seq, resp);
+
+        std::string enter_body = make_user_enter(uid, lat, lng, session->nickname());
+        for (auto& n : nearby) {
+            send_to_uid(n.uid, static_cast<uint16_t>(common::MsgType::kUserEnter), enter_body);
+        }
+        return;
+    }
+
+    // 移动：广播进入 / 离开 / 更新
+    auto diff = aoi_.move(uid, lat, lng);
+    std::string enter_body = make_user_enter(uid, lat, lng, session->nickname());
+    std::string update_body = make_position_update(uid, lat, lng);
+    std::string leave_body = make_user_leave(uid);
+
+    for (auto& n : diff.entered) {
+        send_to_uid(n.uid, static_cast<uint16_t>(common::MsgType::kUserEnter), enter_body);
+        session->send_packet(static_cast<uint16_t>(common::MsgType::kUserEnter), 0,
+                             make_user_enter(n.uid, n.lat, n.lng, nickname_of(n.uid)));
+    }
+    for (auto& n : diff.left) {
+        send_to_uid(n.uid, static_cast<uint16_t>(common::MsgType::kUserLeave), leave_body);
+        session->send_packet(static_cast<uint16_t>(common::MsgType::kUserLeave), 0,
+                             make_user_leave(n.uid));
+    }
+    for (auto& n : diff.stayed) {
+        send_to_uid(n.uid, static_cast<uint16_t>(common::MsgType::kPositionUpdate), update_body);
+    }
+
+    Json::Value resp;
+    resp["code"] = 0;
+    send_json(session, static_cast<uint16_t>(common::MsgType::kPositionReportResp), seq, resp);
+}
+
+void AuthService::remove_from_aoi(uint32_t uid) {
+    auto neighbors = aoi_.leave(uid);
+    redis_.del("coord:" + std::to_string(uid));
+    if (neighbors.empty()) {
+        return;
+    }
+    std::string body = make_user_leave(uid);
+    for (auto& n : neighbors) {
+        send_to_uid(n.uid, static_cast<uint16_t>(common::MsgType::kUserLeave), body);
+    }
+}
+
+AuthService::SessionPtr AuthService::find_session(uint32_t uid) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = sessions_.find(uid);
+    if (it == sessions_.end()) {
+        return nullptr;
+    }
+    return it->second.lock();
+}
+
+void AuthService::send_to_uid(uint32_t uid, uint16_t msg_type, const std::string& body) {
+    auto s = find_session(uid);
+    if (s) {
+        s->send_packet(msg_type, 0, body);
+    }
+}
+
+std::string AuthService::nickname_of(uint32_t uid) {
+    auto s = find_session(uid);
+    return s ? s->nickname() : "";
 }
 
 void AuthService::send_error(const SessionPtr& session, uint32_t seq, int code,

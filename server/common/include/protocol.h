@@ -25,11 +25,16 @@ enum class MsgType : uint16_t {
     kAuthReq = 0x0006,       // 首包鉴权：携带 JWT token
     kHeartbeatReq = 0x0003,  // 心跳
     kLogoutReq = 0x0004,     // 登出
+    kPositionReportReq = 0x0007,  // 坐标上报：{"lng","lat"}
 
     kAuthResp = 0x8006,
     kHeartbeatResp = 0x8003,
     kLogoutResp = 0x8004,
     kKickNotify = 0x8005,    // 服务端推送：已在别处登录/心跳超时
+    kPositionReportResp = 0x8007,  // {"code","nearby":[{"uid","lng","lat","nickname"}]}
+    kUserEnter = 0x8008,     // 推送：{"uid","lng","lat","nickname"}
+    kUserLeave = 0x8009,     // 推送：{"uid"}
+    kPositionUpdate = 0x800A,// 推送：{"uid","lng","lat"}
     kError = 0x8000,
 };
 
