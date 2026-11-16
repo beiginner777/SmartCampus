@@ -18,7 +18,7 @@ using tcp = net::ip::tcp;
 // HTTP 会话：读一个请求 → 路由 → 写响应 → 关闭（M1 单请求/连接）
 class HttpSession : public std::enable_shared_from_this<HttpSession> {
 public:
-    HttpSession(tcp::socket socket, AppState& st);
+    HttpSession(tcp::socket socket, AuthContext& st);
 
     void run();
 
@@ -28,24 +28,24 @@ private:
     void close();
 
     static http::response<http::string_body> dispatch(const http::request<http::string_body>& req,
-                                                      AppState& st);
+                                                      AuthContext& st);
 
     tcp::socket socket_;
     beast::flat_buffer buffer_;
     http::request<http::string_body> req_;
-    AppState& st_;
+    AuthContext& st_;
 };
 
 // HTTP 监听器：接受连接，为每个连接创建 HttpSession
 class HttpServer {
 public:
-    HttpServer(net::io_context& io, const tcp::endpoint& ep, AppState& st);
+    HttpServer(net::io_context& io, const tcp::endpoint& ep, AuthContext& st);
 
 private:
     void do_accept();
 
     tcp::acceptor acceptor_;
-    AppState& st_;
+    AuthContext& st_;
 };
 
 }  // namespace auth

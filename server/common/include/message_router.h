@@ -5,6 +5,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "logger.h"
+
 namespace common {
 
 // 消息路由：msg_type → handler 的注册/分发（header-only 模板）。
@@ -23,6 +25,7 @@ public:
     bool dispatch(uint16_t msg_type, ConnectionT& conn, uint32_t seq, const std::string& body) {
         auto it = handlers_.find(msg_type);
         if (it == handlers_.end()) {
+            LOG_CRITICAL("unknown msg type: {}", msg_type);
             return false;
         }
         it->second(conn, seq, body);

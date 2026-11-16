@@ -27,7 +27,13 @@ void Session::set_auth(uint32_t uid, std::string username, std::string nickname)
 }
 
 void Session::touch_heartbeat() {
-    last_heartbeat_ = std::chrono::steady_clock::now();
+    last_heartbeat_ticks_.store(std::chrono::steady_clock::now().time_since_epoch().count(),
+                                std::memory_order_relaxed);
+}
+
+std::chrono::steady_clock::time_point Session::last_heartbeat() const {
+    return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(
+        last_heartbeat_ticks_.load(std::memory_order_relaxed)));
 }
 
 void Session::do_read() {

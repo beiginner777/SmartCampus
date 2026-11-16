@@ -35,7 +35,7 @@ void kick_user_via_grpc(const std::string& addr, uint32_t uid) {
 
 }  // namespace
 
-Json::Value handle_register(const Json::Value& req, AppState& st) {
+Json::Value handle_register(const Json::Value& req, AuthContext& st) {
     std::string username = req.isMember("username") ? req["username"].asString() : "";
     std::string password = req.isMember("password") ? req["password"].asString() : "";
     int role = req.isMember("role") ? req["role"].asInt() : 0;
@@ -52,7 +52,7 @@ Json::Value handle_register(const Json::Value& req, AppState& st) {
     std::string hash = common::hash_password(password);
     try {
         auto conn = st.pg.acquire();
-        conn->execute(
+        conn.execute(
             "INSERT INTO users(username, password_hash, role, nickname, tags) "
             "VALUES($1,$2,$3,$4,$5)",
             {username, hash, std::to_string(role), nickname, tags});
@@ -75,7 +75,7 @@ Json::Value handle_register(const Json::Value& req, AppState& st) {
     return resp;
 }
 
-Json::Value handle_login(const Json::Value& req, AppState& st) {
+Json::Value handle_login(const Json::Value& req, AuthContext& st) {
     std::string username = req.isMember("username") ? req["username"].asString() : "";
     std::string password = req.isMember("password") ? req["password"].asString() : "";
 
@@ -85,7 +85,7 @@ Json::Value handle_login(const Json::Value& req, AppState& st) {
     int role = 0;
     try {
         auto conn = st.pg.acquire();
-        auto res = conn->query(
+        auto res = conn.query(
             "SELECT id, password_hash, nickname, role, tags FROM users WHERE username=$1",
             {username});
         if (res.rows() == 0) {
@@ -137,7 +137,7 @@ Json::Value handle_login(const Json::Value& req, AppState& st) {
     return resp;
 }
 
-Json::Value handle_refresh(const Json::Value& req, AppState& st) {
+Json::Value handle_refresh(const Json::Value& req, AuthContext& st) {
     std::string token = req.isMember("token") ? req["token"].asString() : "";
     Json::Value resp;
     common::JwtPayload payload;

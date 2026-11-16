@@ -1,7 +1,7 @@
-#include "auth_service.h"
 #include "config.h"
 #include "kick_service.h"
 #include "logger.h"
+#include "logic.h"
 #include "redis_pool.h"
 #include "tcp_server.h"
 
@@ -17,8 +17,8 @@
 
 using common::Config;
 using common::Logger;
-using gateway::AuthService;
 using gateway::KickService;
+using gateway::Logic;
 using gateway::TcpServer;
 
 namespace {
@@ -70,25 +70,30 @@ int main(int argc, char* argv[]) {
 #endif
 
     try {
-        // Redis（互踢 PubSub 协调；缺失时互踢降级）
+        // Redis（路由表 conn:{uid} / 会话缓存 session:{uid} / 坐标缓存 coord:{uid}）
         common::RedisPool::Options redis_opt;
         redis_opt.host = cfg.redis.host;
         redis_opt.port = cfg.redis.port;
         redis_opt.password = cfg.redis.password;
         redis_opt.pool_size = cfg.redis.pool_size;
         common::RedisPool redis(redis_opt);
-        LOG_INFO("Redis {}", redis.is_available() ? "已连接" : "不可用（互踢降级）");
+        LOG_INFO("Redis {}", redis.is_available() ? "已连接" : "不可用（会话/互踢/坐标降级）");
 
         // 网关 gRPC 地址（写入路由表，AuthServer 据此踢人）
         std::string gateway_grpc_addr =
             cfg.gateway_grpc.host + ":" + std::to_string(cfg.gateway_grpc.port);
 
-        // 鉴权/会话管理（JWT 无状态校验，注册/登录在 AuthServer）
-        AuthService auth(io, redis, cfg.jwt, cfg.heartbeat, gateway_grpc_addr);
-        auth.start();
+        // 1. TcpServer：连接管理（连接表 + 心跳 + 互踢 + 路由表 conn:{uid}）
+        TcpServer::Options opt;
+        opt.host = cfg.host;
+        opt.port = cfg.port;
+        TcpServer server(io, opt, redis, cfg.heartbeat, gateway_grpc_addr);
 
-        // gRPC 控制面（踢人）
-        KickService kick_service(auth);
+        // 2. Logic：逻辑层（鉴权 + AOI + 逻辑线程池，异步处理业务消息）
+        Logic logic(server, redis, cfg.jwt, 4);
+
+        // 3. KickService：gRPC 控制面（异地互踢）
+        KickService kick_service(server);
         grpc::ServerBuilder grpc_builder;
         grpc_builder.AddListeningPort("0.0.0.0:" + std::to_string(cfg.gateway_grpc.port),
                                       grpc::InsecureServerCredentials());
@@ -101,21 +106,17 @@ int main(int argc, char* argv[]) {
         LOG_INFO("gRPC 控制面监听 0.0.0.0:{}", cfg.gateway_grpc.port);
         std::thread grpc_thread([&grpc_server] { grpc_server->Wait(); });
 
-        // TCP 接入
-        TcpServer::Options opt;
-        opt.host = cfg.host;
-        opt.port = cfg.port;
-        TcpServer server(io, opt);
+        // 组装回调：网络层只解析并投递，业务消息交给逻辑层异步处理
         server.on_connected = [](const auto& s) { LOG_INFO("客户端接入: {}", s->remote()); };
-        server.on_packet = [&auth](const auto& s, const common::Packet& pkt) {
-            auth.handle_packet(s, pkt);
+        server.on_packet = [&logic](const auto& s, const common::Packet& pkt) {
+            logic.post_message(s, pkt);
         };
-        server.on_disconnected = [&auth](const auto& s, const std::string& reason) {
-            auth.handle_disconnect(s, reason);
+        server.on_disconnected = [&logic](const auto& s, const std::string& reason) {
+            logic.handle_disconnect(s, reason);
         };
         server.start();
 
-        LOG_INFO("=== 智慧校园服务端 (M1 通信底座 + 鉴权) 启动 ===");
+        LOG_INFO("=== 智慧校园服务端 (M2 AOI 空间索引 + 地图) 启动 ===");
         LOG_INFO("监听 {}:{}  工作线程 {}", cfg.host, cfg.port, cfg.thread_count);
 
         std::vector<std::thread> pool;

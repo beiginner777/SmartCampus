@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
         LOG_INFO("Redis {}", redis.is_available() ? "已连接" : "不可用（会话/互踢降级）");
 
         common::JwtAuth jwt(cfg.jwt.secret);
-        auth::AppState st{pg, redis, jwt, cfg.jwt.expire_seconds};
+        auth::AuthContext st{pg, redis, jwt, cfg.jwt.expire_seconds};
 
         auto addr = boost::asio::ip::make_address(cfg.auth.host);
         auth::HttpServer server(io, boost::asio::ip::tcp::endpoint(addr, cfg.auth.port), st);

@@ -34,7 +34,7 @@ http::response<http::string_body> json_response(const Json::Value& v, unsigned v
 
 }  // namespace
 
-HttpSession::HttpSession(tcp::socket socket, AppState& st) : socket_(std::move(socket)), st_(st) {}
+HttpSession::HttpSession(tcp::socket socket, AuthContext& st) : socket_(std::move(socket)), st_(st) {}
 
 void HttpSession::run() { read_request(); }
 
@@ -69,7 +69,7 @@ void HttpSession::close() {
 }
 
 http::response<http::string_body> HttpSession::dispatch(const http::request<http::string_body>& req,
-                                                        AppState& st) {
+                                                        AuthContext& st) {
     Json::Value body;
     if (!req.body().empty()) {
         Json::Reader reader;
@@ -95,7 +95,7 @@ http::response<http::string_body> HttpSession::dispatch(const http::request<http
     return json_response(resp, req.version());
 }
 
-HttpServer::HttpServer(net::io_context& io, const tcp::endpoint& ep, AppState& st)
+HttpServer::HttpServer(net::io_context& io, const tcp::endpoint& ep, AuthContext& st)
     : acceptor_(io, ep), st_(st) {
     acceptor_.set_option(net::socket_base::reuse_address(true));
     do_accept();

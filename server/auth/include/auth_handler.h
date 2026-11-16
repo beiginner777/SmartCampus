@@ -9,7 +9,7 @@
 namespace auth {
 
 // AuthServer 共享状态：PG / Redis / JWT
-struct AppState {
+struct AuthContext {
     common::PgPool& pg;
     common::RedisPool& redis;
     common::JwtAuth& jwt;
@@ -17,8 +17,8 @@ struct AppState {
 };
 
 // 业务处理：返回 JSON（code=0 成功，非 0 错误）
-Json::Value handle_register(const Json::Value& req, AppState& st);
-Json::Value handle_login(const Json::Value& req, AppState& st);
-Json::Value handle_refresh(const Json::Value& req, AppState& st);
+Json::Value handle_register(const Json::Value& req, AuthContext& st);
+Json::Value handle_login(const Json::Value& req, AuthContext& st);
+Json::Value handle_refresh(const Json::Value& req, AuthContext& st);
 
 }  // namespace auth

@@ -1,9 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
-#include <memory>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -34,11 +35,16 @@ private:
     PGresult* res_ = nullptr;
 };
 
-// RAII 封装单个 PGconn
+class PgPool;
+
+// 连接对象：持有 PGconn + 最后活跃时间戳 + 健康状态。
+// 析构时自动归还池子（健康）或 PQfinish（失效），无需额外的池化包装。
 class PgConnection {
 public:
-    explicit PgConnection(PGconn* conn);
+    PgConnection(PGconn* conn, PgPool* pool, std::chrono::steady_clock::time_point last_used);
     ~PgConnection();
+    PgConnection(PgConnection&& o) noexcept;
+    PgConnection& operator=(PgConnection&& o) noexcept;
     PgConnection(const PgConnection&) = delete;
     PgConnection& operator=(const PgConnection&) = delete;
 
@@ -53,35 +59,22 @@ public:
     // 心跳检测：执行 SELECT 1 判断连接是否存活（不抛异常）
     bool ping();
 
+    // 每次成功使用后刷新最后活跃时间
+    void touch() { last_used_ = std::chrono::steady_clock::now(); }
+    std::chrono::steady_clock::time_point last_used() const { return last_used_; }
+
 private:
+    void release_own();  // 归还或释放当前持有的连接（供析构/移动赋值复用）
+
     PGconn* conn_ = nullptr;
-};
-
-class PgPool;
-
-// 池化连接：析构时自动归还连接池
-class PooledPgConnection {
-public:
-    PooledPgConnection(std::shared_ptr<PgConnection> conn, PgPool* pool);
-    ~PooledPgConnection();
-    PooledPgConnection(PooledPgConnection&& o) noexcept;
-    PooledPgConnection& operator=(PooledPgConnection&& o) noexcept;
-    PooledPgConnection(const PooledPgConnection&) = delete;
-    PooledPgConnection& operator=(const PooledPgConnection&) = delete;
-
-    PgConnection* operator->() { return conn_.get(); }
-    PgConnection& operator*() { return *conn_; }
-    explicit operator bool() const { return conn_ != nullptr; }
-
-private:
-    std::shared_ptr<PgConnection> conn_;
     PgPool* pool_ = nullptr;
+    std::chrono::steady_clock::time_point last_used_;
 };
 
 // PostgreSQL 连接池（基于 libpq）：
 //   - 构造时预建 pool_size 个连接
-//   - 借用/归还（acquire/release）+ 条件变量阻塞
-//   - 后台心跳保活线程：SELECT 1 剔除死连接并自动补齐
+//   - 借用/归还（acquire / 连接析构自动归还）+ 条件变量阻塞
+//   - 后台心跳线程：只对「空闲超时」的连接 SELECT 1，失效释放、自动补齐
 class PgPool {
 public:
     struct Options {
@@ -97,21 +90,24 @@ public:
     ~PgPool();
 
     // 借一个连接（阻塞），池不可用时抛 std::runtime_error
-    PooledPgConnection acquire();
+    PgConnection acquire();
 
-    bool is_available() const { return available_.load(); }
+    bool is_available() const { return up_.load(); }
 
 private:
-    friend class PooledPgConnection;             // 允许其归还连接
-    std::shared_ptr<PgConnection> create();      // 新建连接，失败返回 nullptr（不抛）
-    void release(std::shared_ptr<PgConnection> conn);
+    friend class PgConnection;                          // 允许连接对象归还
+
+    PGconn* create();                                   // 新建连接，失败返回 nullptr
+    void release(PGconn* conn,
+                 std::chrono::steady_clock::time_point last_used);  // 归还健康连接
     void health_check_loop();
 
     Options opt_;
-    std::vector<std::shared_ptr<PgConnection>> idle_;
+    std::deque<PgConnection> idle_;                     // 空闲连接（连接对象本身）
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::atomic_bool available_{false};
+    // 服务可达性：由 create、health_check 维护
+    std::atomic_bool up_{false};
     std::atomic_bool stop_{false};
     std::thread health_thread_;
 };

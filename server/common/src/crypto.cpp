@@ -142,6 +142,15 @@ std::string pbkdf2_sha256(const std::string& password, const std::string& salt,
     return dk;
 }
 
+/**
+ * 用恒定时间比较而非 ==。原因：普通字符串比较在第一个不同字节就返回，攻击者可通过测量响应时间逐字节猜签名（时序攻击）。恒定时间比较让耗时与内容无关。
+ * 不等 → 说明 token 被篡改或密钥不对，返回 false。
+ * 此步通过意味着 header 和 payload 都没被篡改，因为任何改动都会导致 HMAC 结果不同。
+
+ * @param a 期望的签名
+ * @param b JWT的签名
+ * @return JWT合法
+ */
 bool constant_time_equals(const std::string& a, const std::string& b) {
     if (a.size() != b.size()) {
         return false;

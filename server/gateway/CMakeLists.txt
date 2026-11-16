@@ -4,6 +4,9 @@ add_executable(gateway
     src/tcp_server.cpp
     src/session.cpp
     src/auth_service.cpp
+    src/aoi_service.cpp
+    src/logic.cpp
+    src/logic_worker.cpp
     src/kick_service.cpp)
 
 target_include_directories(gateway PRIVATE include)

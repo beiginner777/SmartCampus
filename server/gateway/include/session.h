@@ -5,6 +5,7 @@
 #include <boost/asio.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -37,9 +38,9 @@ public:
     const std::string& nickname() const { return nickname_; }
     void set_auth(uint32_t uid, std::string username, std::string nickname);
 
-    // 心跳
+    // 心跳（touch 在逻辑线程、超时检测在 IO 线程，跨线程访问需原子）
     void touch_heartbeat();
-    std::chrono::steady_clock::time_point last_heartbeat() const { return last_heartbeat_; }
+    std::chrono::steady_clock::time_point last_heartbeat() const;
 
     const std::string& remote() const { return remote_; }
 
@@ -63,7 +64,7 @@ private:
     uint32_t uid_ = 0;
     std::string username_;
     std::string nickname_;
-    std::chrono::steady_clock::time_point last_heartbeat_;
+    std::atomic<int64_t> last_heartbeat_ticks_{0};  // 心跳时间戳（tick count，跨线程安全）
 };
 
 }  // namespace gateway
