@@ -413,6 +413,39 @@ sequenceDiagram
 
 坐标上报（M2 AOI）：客户端 AUTH 后周期上报 `POSITION_REPORT{lng,lat}`（约 3s 或移动时，lng/lat 为 WGS84 经纬度、6 位小数≈0.1m）。首次上报时服务端将其纳入 AOI 九宫格，广播 `USER_ENTER` 给邻格用户，并回 `POSITION_REPORT_RESP` 携带附近用户列表 `nearby`；后续同格移动广播 `POSITION_UPDATE`、跨格移动广播 `USER_LEAVE`（旧邻格）+ `USER_ENTER`（新邻格）；下线（logout/断线）广播 `USER_LEAVE` 给邻格。心跳 `HEARTBEAT` 仍负责连接保活，与坐标上报相互独立。
 
+**字段说明**（TCP 消息 body 里的通用字段）：
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `token` | string | JWT 令牌（`POST /login` 返回） |
+| `lng` / `lat` | double | WGS84 经纬度，6 位小数（≈0.1m） |
+| `uid` | uint32 | 用户 id |
+| `username` / `nickname` | string | 用户名 / 昵称 |
+| `code` | int | 业务码，0 成功，非 0 见错误码 |
+| `nearby` | array | 附近用户列表，元素含 `uid`/`lng`/`lat`/`nickname` |
+| `reason` | string | 踢下线原因（"已在别处登录"/"心跳超时"） |
+
+**消息示例**（客户端最常用）：
+
+```json
+// AUTH_REQ（C→S）：登录后首包鉴权
+{"token":"eyJhbGciOiJIUzI1NiJ9.eyJ1aWQiOjF9.xxx"}
+// AUTH_RESP（S→C）
+{"code":0,"uid":1,"username":"student1"}
+
+// POSITION_REPORT_REQ（C→S）：坐标上报
+{"lng":116.3975,"lat":39.9055}
+// POSITION_REPORT_RESP（S→C，首次上报带 nearby）
+{"code":0,"nearby":[{"uid":2,"lng":116.3976,"lat":39.9056,"nickname":"路人1"}]}
+
+// USER_ENTER（S→C 推送）：有用户进入视野
+{"uid":2,"lng":116.3976,"lat":39.9056,"nickname":"路人1"}
+// USER_LEAVE（S→C 推送）：有用户离开视野
+{"uid":2}
+// POSITION_UPDATE（S→C 推送）：附近用户位置更新
+{"uid":2,"lng":116.3977,"lat":39.9057}
+```
+
 ### 3. 网关控制面 gRPC（Gateway，默认 9001）
 
 服务端内部（AuthServer ↔ Gateway）用 gRPC 协调异地互踢：
